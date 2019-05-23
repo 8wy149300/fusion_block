@@ -130,7 +130,7 @@ class DatasetManager():
         def _filter_max_length(example, max_length=150):
             return tf.logical_and(
                 tf.size(input=example[0]) <= 320 * 4096,
-                tf.greater_equal(example[2], tf.constant(0.1)[0]))
+                tf.greater_equal(example[2], tf.constant(0.1))[0])
 
         dataset = files.apply(
             tf.data.experimental.parallel_interleave(
