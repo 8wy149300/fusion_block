@@ -122,7 +122,7 @@ class HyperParam:
               clipping=5,
               inference_length=30,
               data_shuffle=45000,
-              dropout=0.1,
+              dropout=0.3,
               learning_warmup=3000):
 
         self.embedding_size = embedding_size
