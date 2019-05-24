@@ -212,7 +212,7 @@ class Daedalus(tf.keras.layers.Layer):
 
         mask_id = self.MASK_ID
         mask_words = tf.zeros_like(Q[:, :, 0], dtype=tf.int32) + mask_id
-        mask_embedding = self.word_embedding(mask_words) * self.num_units**0.5
+        mask_embedding = self.word_embedding(mask_words)
 
         enc = self.Encoder(
             Q,
