@@ -3,7 +3,8 @@ import tensorflow as tf
 import core_Transformer_model
 from hyper_and_conf import hyper_layer
 from hyper_and_conf import hyper_beam_search as beam_search
-from hyper_and_conf import hyper_param
+# from hyper_and_conf import hyper_param
+from core_FusionBlock_model import Fusion_Block
 
 # tf.enable_eager_execution()
 
@@ -99,6 +100,7 @@ class Daedalus(tf.keras.layers.Layer):
             name='word_embedding')
         # self.pre_encoder = self.get_encoder(self)
         # self.pre2_encoder = self.get_encoder(self)
+        self.fusion_block = Fusion_Block(self.num_units, self.dropout)
         self.Encoder = self.get_encoder(
             self.max_seq_len,
             self.vocabulary_size,
@@ -168,13 +170,14 @@ class Daedalus(tf.keras.layers.Layer):
         mask_id = self.MASK_ID
         mask_words = tf.zeros_like(Q[:, :, 0], dtype=tf.int32) + mask_id
         mask_embedding = self.word_embedding(mask_words)
+        Q = self.fusion_block((mask_embedding, Q), training=True)
         # mask_embedding = mask_embedding * self.num_units**0.5
 
         encoder_out = self.Encoder(
             Q,
             img_input_padding,
-            fusion_matrix=mask_embedding,
-            position=True,
+            # fusion_matrix=mask_embedding,
+            position=False,
             training=True)
 
         embedding_tgt_input = self.word_embedding(tgt_input)
@@ -204,7 +207,6 @@ class Daedalus(tf.keras.layers.Layer):
         Q = tf.keras.activations.relu(tf.keras.backend.dot(Q, self.Q_2nd))
         dropout_mask = tf.keras.backend.dropout(tf.ones_like(Q), self.dropout)
         Q = Q * dropout_mask
-        print(Q)
 
         img_input_padding = tf.cast(
             tf.equal(Q, self.PAD_ID), dtype=tf.float32)[:, :, 0]
@@ -213,13 +215,10 @@ class Daedalus(tf.keras.layers.Layer):
         mask_id = self.MASK_ID
         mask_words = tf.zeros_like(Q[:, :, 0], dtype=tf.int32) + mask_id
         mask_embedding = self.word_embedding(mask_words)
+        Q = self.fusion_block((mask_embedding, Q), training=True)
 
         enc = self.Encoder(
-            Q,
-            img_input_padding,
-            fusion_matrix=mask_embedding,
-            position=True,
-            training=False)
+            Q, img_input_padding, position=False, training=False)
         # initial_ids = tf.constant( self.sos_id, shape=[self.batch_size], dtype=tf.int32)
         initial_ids = tf.zeros([initial_size], dtype=tf.int32)
 

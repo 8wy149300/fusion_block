@@ -33,17 +33,17 @@ class Transformer_Encoder(tf.keras.layers.Layer):
         self.pad_id = pad_id
 
         self.position_encoding = hyper_layer.Positional_Encoding(
-            2 * self.num_units)
+            self.num_units)
         self.en_att = []
         self.en_ffn = []
-        self.fusion_kernel = []
-        self.fusion_kernel_2nd = []
-        self.fusion_ffn = []
-        self.fusion_bias = []
-        self.fusion_bias_2nd = []
+        # self.fusion_kernel = []
+        # self.fusion_kernel_2nd = []
+        # self.fusion_ffn = []
+        # self.fusion_bias = []
+        # self.fusion_bias_2nd = []
         self.negtive_infinit = -1e32
         self.norm = hyper_layer.LayerNorm()
-        self.normx2 = hyper_layer.LayerNorm()
+        # self.normx2 = hyper_layer.LayerNorm()
         for i in range(self.num_encoder_layers):
             self.en_att.append(
                 hyper_layer.Multi_Head_Attention(
@@ -57,23 +57,23 @@ class Transformer_Encoder(tf.keras.layers.Layer):
                     num_units=4 * self.num_units,
                     dropout=self.dropout,
                     name="enc_ffn_%d" % i))
-            if fusion:
-                self.fusion_bias.append(
-                    self.add_variable(
-                        shape=self.num_units,
-                        name="fusion_bias_%d" % i,
-                        initializer=tf.keras.initializers.get('zeros')))
-                self.fusion_kernel.append(
-                    self.add_variable(
-                        name='fusion_block_%d' % i,
-                        shape=[2 * self.num_units, self.num_units],
-                        initializer=tf.keras.initializers.get(
-                            "glorot_uniform")))
-                self.fusion_ffn.append(
-                    hyper_layer.Feed_Forward_Network(
-                        num_units=4 * self.num_units,
-                        dropout=self.dropout,
-                        name="fusion_ffn_%d" % i))
+            # if fusion:
+            #     self.fusion_bias.append(
+            #         self.add_variable(
+            #             shape=self.num_units,
+            #             name="fusion_bias_%d" % i,
+            #             initializer=tf.keras.initializers.get('zeros')))
+            #     self.fusion_kernel.append(
+            #         self.add_variable(
+            #             name='fusion_block_%d' % i,
+            #             shape=[2 * self.num_units, self.num_units],
+            #             initializer=tf.keras.initializers.get(
+            #                 "glorot_uniform")))
+            #     self.fusion_ffn.append(
+            #         hyper_layer.Feed_Forward_Network(
+            #             num_units=4 * self.num_units,
+            #             dropout=self.dropout,
+            #             name="fusion_ffn_%d" % i))
 
     def call(self,
              inputs,
@@ -93,6 +93,9 @@ class Transformer_Encoder(tf.keras.layers.Layer):
 
             if length is None:
                 length = tf.shape(input=inputs)[1]
+            if position:
+                positional_input = self.position_encoding(length)
+                inputs = inputs + positional_input
             if padding_matrix is not None:
                 padding_mask_bias = self.padding_bias(padding_matrix)
             else:
@@ -101,56 +104,56 @@ class Transformer_Encoder(tf.keras.layers.Layer):
             for i in range(self.num_encoder_layers):
                 with tf.compat.v1.name_scope('layer_%d' % i):
                     # block 1
-                    if fusion_matrix is not None:
-                        with tf.name_scope('fusion_block_%d' % i):
-                            org = outputs
-                            outputs = tf.keras.layers.concatenate(
-                                [outputs, fusion_matrix], axis=-1)
-                            if i == 0:
-                                if position:
-                                    positional_input = self.position_encoding(
-                                        length)
-                                    outputs = outputs + positional_input
-                                    if training is not False:
-                                        dropout_mask_inputs = tf.keras.backend.dropout(
-                                            tf.ones_like(outputs),
-                                            self.dropout)
-                                        outputs = outputs * dropout_mask_inputs
-                            norm = self.normx2(outputs)
-                            res = self.fusion_ffn[i](norm)
-                            res = tf.keras.layers.Activation("relu")(res)
-                            res = tf.keras.backend.dot(res,
-                                                       self.fusion_kernel[i])
-                            res = tf.keras.layers.Activation("relu")(res)
-                            res = res + self.fusion_bias[i]
-
-                            self.fusion_res.append(res)
-
-                            if training is not False:
-                                dropout_mask_inputs = tf.keras.backend.dropout(
-                                    tf.ones_like(res), self.dropout)
-                                res = res * dropout_mask_inputs
-                            outputs = res + org
-                    # # block 2
-                    # norm = self.norm(outputs)
-                    # multi_att = self.en_att[i](
-                    #     norm,
-                    #     K_V=(norm, norm),
-                    #     bias=padding_mask_bias,
-                    #     training=training)
-                    # if training is not False:
-                    #     dropout_mask_inputs = tf.keras.backend.dropout(
-                    #         tf.ones_like(multi_att), self.dropout)
-                    #     multi_att = multi_att * dropout_mask_inputs
-                    # res = outputs + multi_att
-                    # # block 3
-                    # multi_att = self.norm(res)
-                    # multi_att = self.en_ffn[i](multi_att, training=training)
-                    # if training is not False:
-                    #     dropout_mask_inputs = tf.keras.backend.dropout(
-                    #         tf.ones_like(multi_att), self.dropout)
-                    #     multi_att = multi_att * dropout_mask_inputs
-                    # outputs = res + multi_att
+                    # if fusion_matrix is not None:
+                    #     with tf.name_scope('fusion_block_%d' % i):
+                    #         org = outputs
+                    #         outputs = tf.keras.layers.concatenate(
+                    #             [outputs, fusion_matrix], axis=-1)
+                    #         if i == 0:
+                    #             if position:
+                    #                 positional_input = self.position_encoding(
+                    #                     length)
+                    #                 outputs = outputs + positional_input
+                    #                 if training is not False:
+                    #                     dropout_mask_inputs = tf.keras.backend.dropout(
+                    #                         tf.ones_like(outputs),
+                    #                         self.dropout)
+                    #                     outputs = outputs * dropout_mask_inputs
+                    #         norm = self.normx2(outputs)
+                    #         res = self.fusion_ffn[i](norm)
+                    #         res = tf.keras.layers.Activation("relu")(res)
+                    #         res = tf.keras.backend.dot(res,
+                    #                                    self.fusion_kernel[i])
+                    #         res = tf.keras.layers.Activation("relu")(res)
+                    #         res = res + self.fusion_bias[i]
+                    #
+                    #         self.fusion_res.append(res)
+                    #
+                    #         if training is not False:
+                    #             dropout_mask_inputs = tf.keras.backend.dropout(
+                    #                 tf.ones_like(res), self.dropout)
+                    #             res = res * dropout_mask_inputs
+                    #         outputs = res + org
+                    # block 2
+                    norm = self.norm(outputs)
+                    multi_att = self.en_att[i](
+                        norm,
+                        K_V=(norm, norm),
+                        bias=padding_mask_bias,
+                        training=training)
+                    if training is not False:
+                        dropout_mask_inputs = tf.keras.backend.dropout(
+                            tf.ones_like(multi_att), self.dropout)
+                        multi_att = multi_att * dropout_mask_inputs
+                    res = outputs + multi_att
+                    # block 3
+                    multi_att = self.norm(res)
+                    multi_att = self.en_ffn[i](multi_att, training=training)
+                    if training is not False:
+                        dropout_mask_inputs = tf.keras.backend.dropout(
+                            tf.ones_like(multi_att), self.dropout)
+                        multi_att = multi_att * dropout_mask_inputs
+                    outputs = res + multi_att
         return self.norm(outputs)
 
     def padding_bias(self, padding):
