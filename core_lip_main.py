@@ -138,6 +138,10 @@ class Daedalus(tf.keras.layers.Layer):
             initializer=self.kernel_initializer)
         self.norm = hyper_layer.LayerNorm()
         self.build = True
+        self.mask_kernel = self.add_variable(
+            name='mask_kernel',
+            shape=[self.num_units, self.num_units],
+            initializer=tf.keras.initializers.get("glorot_uniform"))
 
     def call(self, inputs, training=True):
         if training is False:
@@ -153,9 +157,10 @@ class Daedalus(tf.keras.layers.Layer):
 
     def train_model(self, inputs, training=True):
         img_input, tgt_input = inputs
-        img_input = img_input * self.num_units**0.5
+        # img_input = img_input * self.num_units**0.5
         img_input_padding = tf.cast(
-            tf.equal(img_input, self.PAD_ID), dtype=tf.float32)[:, :, 0]
+            tf.equal(tf.reduce_sum(img_input, -1), 0.),
+            dtype=tf.float32)
         dropout_mask = tf.keras.backend.dropout(
             tf.ones_like(img_input), self.dropout)
         img_input = img_input * dropout_mask
@@ -168,16 +173,18 @@ class Daedalus(tf.keras.layers.Layer):
         dropout_mask = tf.keras.backend.dropout(tf.ones_like(Q), self.dropout)
         Q = Q * dropout_mask
         mask_id = self.MASK_ID
-        mask_words = tf.zeros_like(Q[:, :, 0], dtype=tf.int32) + mask_id
+        mask_words = tf.cast((1 - img_input_padding) * mask_id, tf.int32)
         mask_embedding = self.word_embedding(mask_words)
-        Q = self.fusion_block((mask_embedding, Q), training=True)
+        mask_embedding = tf.keras.backend.dot(mask_embedding, self.mask_kernel)
+
+        Q = self.fusion_block((Q, mask_embedding), training=True)
         # mask_embedding = mask_embedding * self.num_units**0.5
 
         encoder_out = self.Encoder(
             Q,
-            img_input_padding,
-            # fusion_matrix=mask_embedding,
-            position=False,
+            # img_input_padding,
+            fusion_matrix=mask_embedding,
+            position=True,
             training=True)
 
         embedding_tgt_input = self.word_embedding(tgt_input)
