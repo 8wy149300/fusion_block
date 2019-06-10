@@ -12,6 +12,76 @@ import re
 from hyper_and_conf import conf_fn as conf_train
 
 
+def onehot_loss_function(true,
+                         pred,
+                         mask_id=0,
+                         smoothing=0.1,
+                         vocab_size=24000):
+    """Short summary.
+    Args:
+        pred (type): Description of parameter `pred`.
+        true (type): Description of parameter `true`.
+
+    Returns:
+        type: Description of returned object.
+
+    """
+
+    # mask = 1 - tf.cast(tf.equal(true, mask_id), tf.float32)
+    # loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+    #     logits=pred, labels=true) * mask
+    # return tf.reduce_mean(loss)
+    logits, labels = pad_tensors_to_same_length(pred, true)
+    print(tf.argmax(logits,axis=-1))
+    # Calculate smoothing cross entropy
+    with tf.name_scope("smoothing_cross_entropy"):
+        confidence = 1.0 - smoothing
+        low_confidence = (1.0 - confidence) / tf.cast(vocab_size - 1,
+                                                      tf.float32)
+        soft_targets = tf.one_hot(
+            tf.cast(labels, tf.int32),
+            depth=vocab_size,
+            on_value=confidence,
+            off_value=low_confidence)
+        print(soft_targets)
+        xentropy = tf.nn.softmax_cross_entropy_with_logits(
+            logits=logits, labels=soft_targets)
+
+        # Calculate the best (lowest) possible value of cross entropy, and
+        # subtract from the cross entropy loss.
+        normalizing_constant = -(
+            confidence * tf.math.log(confidence) +
+            tf.cast(vocab_size - 1, tf.float32) * low_confidence *
+            tf.math.log(low_confidence + 1e-20))
+        xentropy -= normalizing_constant
+
+    weights = tf.cast(tf.not_equal(labels, 0), tf.float32)
+
+    weights = tf.cast(tf.not_equal(labels, mask_id), dtype=tf.float32)
+    xentropy *= weights
+    loss = tf.reduce_sum(input_tensor=xentropy) / tf.reduce_sum(
+        input_tensor=weights)
+    return loss
+
+
+def pad_tensors_to_same_length(x, y, pad_id=0):
+    """Pad x and y so that the results have the same length (second dimension)."""
+    x_length = tf.shape(input=x)[1]
+    y_length = tf.shape(input=y)[1]
+
+    max_length = tf.maximum(x_length, y_length)
+
+    x = tf.pad(
+        tensor=x,
+        paddings=[[0, 0], [0, max_length - x_length], [0, 0]],
+        constant_values=pad_id)
+    y = tf.pad(
+        tensor=y,
+        paddings=[[0, 0], [0, max_length - y_length]],
+        constant_values=pad_id)
+    return x, y
+
+
 def token_trim(tokens, trim_id, remider=0):
     try:
         trim = tokens.index(trim_id) + int(remider)
@@ -24,31 +94,6 @@ def token_trim(tokens, trim_id, remider=0):
     return tokens
 
 
-# def wer(r, h):
-#     # initialisation
-#     d = np.zeros((len(r) + 1) * (len(h) + 1), dtype=np.uint8)
-#     d = d.reshape((len(r) + 1, len(h) + 1))
-#     for i in range(len(r) + 1):
-#         for j in range(len(h) + 1):
-#             if i == 0:
-#                 d[0][j] = j
-#             elif j == 0:
-#                 d[i][0] = i
-#
-#     # computation
-#     for i in range(1, len(r) + 1):
-#         for j in range(1, len(h) + 1):
-#             if r[i - 1] == h[j - 1]:
-#                 d[i][j] = d[i - 1][j - 1]
-#             else:
-#                 substitution = d[i - 1][j - 1] + 1
-#                 insertion = d[i][j - 1] + 1
-#                 deletion = d[i - 1][j] + 1
-#                 d[i][j] = min(substitution, insertion, deletion)
-#
-#     return d[len(r)][len(h)]
-
-
 def compute_wer(translation_corpus, reference_corpus, print_matrix=False):
     try:
         # eos_id = 1
@@ -58,67 +103,44 @@ def compute_wer(translation_corpus, reference_corpus, print_matrix=False):
         # eos_id = 1
         reference_corpus = reference_corpus
         translation_corpus = translation_corpus
-    batch_score = 0
-    for (references, translations) in zip(reference_corpus,
-                                          translation_corpus):
-        hyp = token_trim(translations, 1, remider=1)
-        ref = token_trim(references, 0)
-        N = len(hyp)
-        M = len(ref)
-        L = np.zeros((N, M))
-        for i in range(0, N):
-            for j in range(0, M):
-                if min(i, j) == 0:
-                    L[i, j] = max(i, j)
-                else:
-                    deletion = L[i - 1, j] + 1
-                    insertion = L[i, j - 1] + 1
-                    sub = 1 if hyp[i] != ref[j] else 0
-                    substitution = L[i - 1, j - 1] + sub
-                    L[i, j] = min(deletion, min(insertion, substitution))
-                    # print("{} - {}: del {} ins {} sub {} s {}".format(hyp[i], ref[j], deletion, insertion, substitution, sub))
-        if print_matrix:
-            print("WER matrix ({}x{}): ".format(N, M))
-            print(L)
-        score = float(int(L[N - 1, M - 1]) / M)
-        batch_score += score
-    return float(batch_score / len(reference_corpus))
+    # for (references, translations) in zip(reference_corpus,
+    #                                       translation_corpus):
+    hyp = token_trim(translation_corpus, 1, remider=1)
+    ref = token_trim(reference_corpus, 0)
+    N = len(hyp)
+    M = len(ref)
+    L = np.zeros((N, M))
+    for i in range(0, N):
+        for j in range(0, M):
+            if min(i, j) == 0:
+                L[i, j] = max(i, j)
+            else:
+                deletion = L[i - 1, j] + 1
+                insertion = L[i, j - 1] + 1
+                sub = 1 if hyp[i] != ref[j] else 0
+                substitution = L[i - 1, j - 1] + sub
+                L[i, j] = min(deletion, min(insertion, substitution))
+                # print("{} - {}: del {} ins {} sub {} s {}".format(hyp[i], ref[j], deletion, insertion, substitution, sub))
+        # if print_matrix:
+        #     print("WER matrix ({}x{}): ".format(N, M))
+        #     print(L)
+    score = float(int(L[N - 1, M - 1]) / M)
+    # batch_score += score
+    return score
 
 
-def wer_score(logits, labels, eos_id=1):
-    """Approximate BLEU score computation between labels and predictions.
-  An approximate BLEU scoring method since we do not glue word pieces or
-  decode the ids and tokenize the output. By default, we use ngram order of 4
-  and use brevity penalty. Also, this does not have beam search.
-  Args:
-    logits: Tensor of size [batch_size, length_logits, vocab_size]
-    labels: Tensor of size [batch-size, length_labels]
-  Returns:
-    bleu: int, approx bleu score
-  """
-    # predictions = tf.to_int32(tf.argmax(logits, axis=-1))
-    # TODO: Look into removing use of py_func
-    wer = tf.py_function(compute_wer, (logits, labels), tf.float32)
+def wer_score(logits, labels):
+    logits = tf.argmax(logits, axis=-1)
+    num = tf.shape(logits)[0]
+    data = tf.stack([logits, labels], axis=1)
+    data = tf.cast(data, dtype=tf.float32)
 
-    return wer
+    def f(data):
+        wer = tf.py_function(compute_wer, (data[0], data[1]), tf.float32)
+        return wer
 
-
-def bleu_score(logits, labels, eos_id=1):
-    """Approximate BLEU score computation between labels and predictions.
-  An approximate BLEU scoring method since we do not glue word pieces or
-  decode the ids and tokenize the output. By default, we use ngram order of 4
-  and use brevity penalty. Also, this does not have beam search.
-  Args:
-    logits: Tensor of size [batch_size, length_logits, vocab_size]
-    labels: Tensor of size [batch-size, length_labels]
-  Returns:
-    bleu: int, approx bleu score
-  """
-    # predictions = tf.to_int32(tf.argmax(logits, axis=-1))
-    # TODO: Look into removing use of py_func
-    bleu = tf.py_function(compute_bleu, (labels, logits, eos_id), tf.float32)
-
-    return bleu, tf.constant(1.0)
+    wer = tf.map_fn(f, data)
+    return tf.reduce_mean(wer), tf.constant(1.)
 
 
 def _get_ngrams_with_counter(segment, max_order):
@@ -142,7 +164,7 @@ def _get_ngrams_with_counter(segment, max_order):
 def compute_bleu(raw_reference_corpus,
                  raw_translation_corpus,
                  eos_id=1,
-                 max_order=4,
+                 max_order=1,
                  use_bp=True):
     """Computes BLEU score of translated segments against one or more references.
   Args:
@@ -164,16 +186,15 @@ def compute_bleu(raw_reference_corpus,
     possible_matches_by_order = [0] * max_order
     precisions = []
     try:
-        eos_id = eos_id.numpy()
+        # eos_id = eos_id.numpy()
         # eos_id = 1
-        reference_corpus = raw_reference_corpus.numpy().tolist()
-        translation_corpus = raw_translation_corpus.numpy().tolist()
+        reference_corpus = [raw_reference_corpus.numpy().tolist()]
+        translation_corpus = [raw_translation_corpus.numpy().tolist()]
     except Exception:
         eos_id = eos_id
         # eos_id = 1
-        reference_corpus = raw_reference_corpus
-        translation_corpus = raw_translation_corpus
-
+        reference_corpus = [raw_reference_corpus]
+        translation_corpus = [raw_translation_corpus]
     for (references, translations) in zip(reference_corpus,
                                           translation_corpus):
         references = token_trim(references, 0)
@@ -220,6 +241,21 @@ def compute_bleu(raw_reference_corpus,
         bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
     bleu = geo_mean * bp
     return np.float32(bleu)
+
+
+def approx_bleu(logits, labels):
+    logits = tf.argmax(logits, axis=-1)
+    # num = tf.shape(logits)[0]
+    data = tf.stack([labels, logits], axis=1)
+    data = tf.cast(data, dtype=tf.float32)
+
+    def f(data):
+        bleu = tf.py_function(compute_bleu, (data[0], data[1]), tf.float32)
+        return bleu * 100
+
+    score = tf.map_fn(f, data)
+    return tf.reduce_mean(score), tf.constant(1.)
+
 
 
 class UnicodeRegex(object):
@@ -297,74 +333,46 @@ def bleu_wrapper(ref_filename, hyp_filename, case_sensitive=False):
 # bleu_wrapper(ref, tra)
 
 
-def padded_accuracy_score(labels, logits):
-    score = tf.py_function(padded_accuracy, (logits, labels), tf.float32)
-    return score
+def padded_accuracy(logits, labels):
+    """Percentage of times that predictions matches labels on non-0s."""
+    with tf.name_scope("padded_accuracy"):
+        logits, labels = pad_tensors_to_same_length(logits, labels)
+        weights = tf.cast(tf.not_equal(labels, 0), tf.float32)
+        outputs = tf.cast(tf.argmax(logits, axis=-1), tf.int32)
+        padded_labels = tf.cast(labels, tf.int32)
+        return tf.cast(tf.equal(outputs, padded_labels), tf.float32), weights
 
 
-def padded_accuracy_score_topk(labels, logits, k=5):
-    score = tf.py_function(padded_accuracy_topk, (logits, labels, k),
-                           tf.float32)
-    return score
+def padded_accuracy_topk(logits, labels, k):
+    """Percentage of times that top-k predictions matches labels on non-0s."""
+    with tf.name_scope("padded_accuracy_topk"):
+        logits, labels = pad_tensors_to_same_length(logits, labels)
+        weights = tf.cast(tf.not_equal(labels, 0), tf.float32)
+        effective_k = tf.minimum(k, tf.shape(logits)[-1])
+        _, outputs = tf.nn.top_k(logits, k=effective_k)
+        outputs = tf.cast(outputs, tf.int32)
+        padded_labels = tf.cast(labels, tf.int32)
+        padded_labels = tf.expand_dims(padded_labels, axis=-1)
+        padded_labels += tf.zeros_like(outputs)  # Pad to same shape.
+        same = tf.cast(tf.equal(outputs, padded_labels), tf.float32)
+        same_topk = tf.reduce_sum(same, axis=-1)
+        return same_topk, weights
 
 
-def padded_sequence_accuracy_score(labels, logits):
-    score = tf.py_function(padded_sequence_accuracy, (logits, labels),
-                           tf.float32)
-    return score
+def padded_accuracy_top5(logits, labels):
+    return padded_accuracy_topk(logits, labels, 5)
 
 
 def padded_sequence_accuracy(logits, labels):
     """Percentage of times that predictions matches labels everywhere (non-0)."""
-    logits = logits.numpy()
-    labels = labels.numpy()
-    logits, labels = conf_train.pad_tensors_to_same_length(logits, labels)
-    weights = tf.cast(tf.not_equal(labels, 0), dtype=tf.float32)
-    outputs = tf.cast(tf.argmax(input=logits, axis=-1), dtype=tf.int32)
-    padded_labels = tf.cast(labels, dtype=tf.int32)
-    not_correct = tf.cast(
-        tf.not_equal(outputs, padded_labels), dtype=tf.float32) * weights
-    axis = list(range(1, len(outputs.get_shape())))
-    correct_seq = 1.0 - tf.minimum(1.0, tf.reduce_sum(not_correct, axis=axis))
-    return correct_seq
-
-
-def padded_accuracy(logits, labels):
-    logits = logits.numpy()
-    labels = labels.numpy()
-    logits, labels = conf_train.pad_tensors_to_same_length(logits, labels)
-    weights = tf.cast(tf.not_equal(labels, 0), dtype=tf.float32)
-    outputs = tf.cast(tf.argmax(input=logits, axis=-1), dtype=tf.int32)
-    padded_labels = tf.cast(labels, dtype=tf.int32)
-    score = tf.cast(tf.equal(outputs, padded_labels), dtype=tf.float32)
-    score *= weights
-    score = tf.reduce_sum(input_tensor=score) / tf.reduce_sum(
-        input_tensor=weights)
-    return score
-
-
-def padded_accuracy_topk(logits, labels, k):
-    logits = logits.numpy()
-    labels = labels.numpy()
-    k = k.numpy()
-    logits, labels = conf_train.pad_tensors_to_same_length(logits, labels)
-    weights = tf.cast(tf.not_equal(labels, 0), dtype=tf.float32)
-    effective_k = tf.minimum(k, tf.shape(input=logits)[-1])
-    _, outputs = tf.nn.top_k(logits, k=effective_k)
-    outputs = tf.cast(outputs, dtype=tf.int32)
-    padded_labels = tf.cast(labels, dtype=tf.int32)
-    padded_labels = tf.expand_dims(padded_labels, axis=-1)
-    padded_labels += tf.zeros_like(outputs)  # Pad to same shape.
-    same = tf.cast(tf.equal(outputs, padded_labels), dtype=tf.float32)
-    same_topk = tf.reduce_sum(input_tensor=same, axis=-1)
-    same_topk *= weights
-    score = tf.reduce_sum(input_tensor=same_topk) / tf.reduce_sum(
-        input_tensor=weights)
-    return score
-
-
-# a = [[3, 3, 3, 2,2,2,2,1, 1]]
-# b = [[2, 2, 2,2,1,0,0]]
-# compute_wer(a, b)
-# tf.argmax(b, -1)
-# padded_accuracy_score(a,b)
+    with tf.name_scope("padded_sequence_accuracy"):
+        logits, labels = pad_tensors_to_same_length(logits, labels)
+        weights = tf.cast(tf.not_equal(labels, 0), tf.float32)
+        outputs = tf.cast(tf.argmax(logits, axis=-1), tf.int32)
+        padded_labels = tf.cast(labels, tf.int32)
+        not_correct = tf.cast(
+            tf.not_equal(outputs, padded_labels), tf.float32) * weights
+        axis = list(range(1, len(outputs.get_shape())))
+        correct_seq = 1.0 - tf.minimum(1.0,
+                                       tf.reduce_sum(not_correct, axis=axis))
+        return correct_seq, tf.constant(1.0)

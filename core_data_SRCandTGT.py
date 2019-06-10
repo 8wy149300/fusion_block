@@ -130,35 +130,58 @@ class DatasetManager():
         def _filter_max_length(example, max_length=150):
             return tf.logical_and(
                 tf.size(input=example[0]) <= 320 * 4096,
-                tf.greater_equal(example[2], tf.constant(0.1))[0])
+                tf.greater_equal(example[2], 0.2)[0])
+            # tf.greater_equal(example[2], tf.constant(0.1))[0])
 
-        dataset = files.apply(
-            tf.data.experimental.parallel_interleave(
-                lambda file: tf.data.TFRecordDataset(
-                    file, compression_type='GZIP'),
-                cycle_length=12))
+        def format_data(img, text, ratio):
+            return (tf.reshape(img, (-1, 4096)),
+                    tf.cast(text[:256], dtype=tf.int64))
+
+        # dataset = files.apply(
+        #     tf.data.experimental.parallel_interleave(
+        #         lambda file: tf.data.TFRecordDataset(
+        #             file, compression_type='GZIP', buffer_size=8 * 1000 * 1000
+        #         ),
+        #         sloppy=True,
+        #         cycle_length=12))
+        options = tf.data.Options()
+        options.experimental_deterministic = False
+        dataset = files.interleave(
+            lambda file: tf.data.TFRecordDataset(
+                file, compression_type='GZIP', buffer_size=8 * 1000 * 1000),
+            cycle_length=self.cpus,
+            num_parallel_calls=tf.data.experimental.AUTOTUNE).with_options(
+                options)
+        # buffer_output_elements=12,
+        # prefetch_input_elements=12,))
         # dataset = tf.data.TFRecordDataset(
-        #     files, compression_type='GZIP')
-        dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
-        dataset = dataset.map(_parse_example, num_parallel_calls=self.cpus)
+        #     files,
+        #     compression_type='GZIP',
+        #     num_parallel_reads=12,
+        #     buffer_size=8 * 1000 * 1000)
+        # dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        dataset = dataset.map(
+            _parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         dataset = dataset.filter(lambda x, y, z: _filter_max_length((x, y, z),
                                                                     100))
         dataset = dataset.map(
-            lambda img, text, ratio: (tf.reshape(img, (-1, 4096)), text[:256],
-                                      ratio),
-            num_parallel_calls=self.cpus)
-        dataset = dataset.map(
-            lambda img, text, ratio: (
-                img,
-                text,
-            ),
-            num_parallel_calls=self.cpus)
+            format_data, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        # dataset = dataset.map(
+        #     lambda img, text, ratio: (
+        #         img,
+        #         text,
+        #     ),
+        #     num_parallel_calls=self.cpus)
         return dataset
 
     def get_raw_train_dataset(self):
         files = tf.data.Dataset.list_files(
-            self.tfrecord_path + "/train_TFRecord_*")
-            # self.tfrecord_path + "/lr_sentence_train/train_TFRecord_*")
+            [
+                self.tfrecord_path + "/fc1/train_TFRecord_*",
+                self.tfrecord_path + "/pretrain/train_TFRecord_*"
+            ],
+            shuffle=True)
+        # self.tfrecord_path + "/lr_sentence_train/train_TFRecord_*")
 
         return self.create_dataset(files)
 
@@ -186,8 +209,8 @@ class DatasetManager():
 
 
 # DATA_PATH = '/Users/barid/Documents/workspace/batch_data/corpus_fr2eng'
-# sentenceHelper = DatasetManager([DATA_PATH + "/europarl-v7.fr-en.en"],
-#                                 [DATA_PATH + "/europarl-v7.fr-en.en"],
+# sentenceHelper = DatasetManager([DATA_PATH + "/corpus/europarl-v7.fr-en.en"],
+#                                 [DATA_PATH + "/corpus/europarl-v7.fr-en.fr"],
 #                                 batch_size=16,
 #                                 shuffle=100)
 # import numpy as np

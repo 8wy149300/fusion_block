@@ -2,7 +2,7 @@
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.client import device_lib
-
+import math
 _MIN_BOUNDARY = 8
 _BOUNDARY_SCALE = 1.1
 
@@ -27,6 +27,36 @@ def gpus_device():
     return [x.name for x in local_device_protos if x.device_type == 'GPU']
 
 
+def get_position_encoding(length,
+                          hidden_size,
+                          min_timescale=1.0,
+                          max_timescale=1.0e4):
+    """Return positional encoding.
+  Calculates the position encoding as a mix of sine and cosine functions with
+  geometrically increasing wavelengths.
+  Defined and formulized in Attention is All You Need, section 3.5.
+  Args:
+    length: Sequence length.
+    hidden_size: Size of the
+    min_timescale: Minimum scale that will be applied at each position
+    max_timescale: Maximum scale that will be applied at each position
+  Returns:
+    Tensor with shape [length, hidden_size]
+  """
+    position = tf.cast(tf.range(length), tf.float32)
+    num_timescales = hidden_size // 2
+    log_timescale_increment = (
+        math.log(float(max_timescale) / float(min_timescale)) /
+        (tf.cast(num_timescales, tf.float32) - 1))
+    inv_timescales = min_timescale * tf.exp(
+        tf.cast(tf.range(num_timescales), tf.float32) *
+        -log_timescale_increment)
+    scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(
+        inv_timescales, 0)
+    signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
+    return signal
+
+
 def get_learning_rate(learning_rate,
                       hidden_size,
                       step=1,
@@ -43,11 +73,11 @@ def get_learning_rate(learning_rate,
 
         learning_rate *= (hidden_size**-0.5)
         # print(learning_rate)
-        learning_rate = 0.1
+        # learning_rate = 0.1
         # Apply linear warmup
         learning_rate *= min(1, step / warmup_steps)
         # Apply rsqrt decay
-        learning_rate *= (1 / np.sqrt(max(step, warmup_steps)))
+        learning_rate *= (0.5 / np.sqrt(max(step, warmup_steps)))
 
         # # Create a named tensor that will be logged using the logging hook.
         # # The full name includes variable and names scope. In this case, the name
@@ -80,66 +110,3 @@ def pad_tensors_to_same_length(x, y, pad_id=0):
         paddings=[[0, 0], [0, max_length - y_length]],
         constant_values=pad_id)
     return x, y
-
-
-def onehot_loss_function(true,
-                         pred,
-                         mask_id=0,
-                         smoothing=0.1,
-                         vocab_size=24000):
-    """Short summary.
-    Args:
-        pred (type): Description of parameter `pred`.
-        true (type): Description of parameter `true`.
-
-    Returns:
-        type: Description of returned object.
-
-    """
-
-    # mask = 1 - tf.cast(tf.equal(true, mask_id), tf.float32)
-    # loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-    #     logits=pred, labels=true) * mask
-    # return tf.reduce_mean(loss)
-    logits, labels = pad_tensors_to_same_length(pred, true)
-    # Calculate smoothing cross entropy
-    confidence = 1.0 - smoothing
-    low_confidence = (1.0 - confidence) / tf.cast(
-        vocab_size - 1, dtype=tf.float32)
-    soft_targets = tf.one_hot(
-        tf.cast(labels, tf.int32),
-        depth=vocab_size,
-        on_value=confidence,
-        off_value=low_confidence)
-    xentropy = tf.nn.softmax_cross_entropy_with_logits(
-        logits=logits, labels=soft_targets)
-    normalizing_constant = -(confidence * tf.math.log(confidence) + tf.cast(
-        vocab_size - 1, dtype=tf.float32) * low_confidence *
-                             tf.math.log(low_confidence + 1e-20))
-    xentropy -= normalizing_constant
-
-    weights = tf.cast(tf.not_equal(labels, mask_id), dtype=tf.float32)
-    xentropy *= weights
-    loss = tf.reduce_sum(input_tensor=xentropy) / tf.reduce_sum(
-        input_tensor=weights)
-    return loss
-
-
-# lr test
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Data for plotting
-t = np.arange(0, 15000, 1)
-f = lambda lr,unit,step,warmup: get_learning_rate(lr,unit,step,warmup)
-s = [f(2,1024,s,3000) for s in t]
-fig, ax = plt.subplots()
-ax.plot(t, s)
-
-ax.set(xlabel='iteration', ylabel='lr',
-       title='model learning rate')
-ax.grid()
-
-fig.savefig("lr.png")
-plt.show()

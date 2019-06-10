@@ -92,9 +92,11 @@ class SequenceBeamSearch(object):
         # particular batch item. In that case, return alive sequences for that batch
         # item.
         finished_seq = tf.where(
-            tf.reduce_any(input_tensor=finished_flags, axis=1), finished_seq, alive_seq)
+            tf.reduce_any(input_tensor=finished_flags, axis=1), finished_seq,
+            alive_seq)
         finished_scores = tf.where(
-            tf.reduce_any(input_tensor=finished_flags, axis=1), finished_scores, alive_log_probs)
+            tf.reduce_any(input_tensor=finished_flags, axis=1),
+            finished_scores, alive_log_probs)
         return finished_seq, finished_scores
 
     def _create_initial_state(self, initial_ids, initial_cache):
@@ -203,12 +205,14 @@ class SequenceBeamSearch(object):
         # Compute worst score in finished sequences for each batch element
         finished_scores *= tf.cast(
             finished_flags, dtype=tf.float32)  # set filler scores to zero
-        lowest_finished_scores = tf.reduce_min(input_tensor=finished_scores, axis=1)
+        lowest_finished_scores = tf.reduce_min(
+            input_tensor=finished_scores, axis=1)
 
         # If there are no finished sequences in a batch element, then set the lowest
         # finished score to -INF for that element.
         finished_batches = tf.reduce_any(input_tensor=finished_flags, axis=1)
-        lowest_finished_scores += (1. - tf.cast(finished_batches, dtype=tf.float32)) * -INF
+        lowest_finished_scores += (
+            1. - tf.cast(finished_batches, dtype=tf.float32)) * -INF
 
         worst_finished_score_better_than_best_alive_score = tf.reduce_all(
             input_tensor=tf.greater(lowest_finished_scores, best_alive_scores))
@@ -382,7 +386,8 @@ class SequenceBeamSearch(object):
 
         # Set the scores of the still-alive seq in new_seq to large negative values.
         new_finished_flags = tf.equal(new_seq[:, :, -1], self.eos_id)
-        new_scores += (1. - tf.cast(new_finished_flags, dtype=tf.float32)) * -INF
+        new_scores += (
+            1. - tf.cast(new_finished_flags, dtype=tf.float32)) * -INF
 
         # Combine sequences, scores, and flags.
         finished_seq = tf.concat([finished_seq, new_seq], axis=1)
@@ -403,41 +408,42 @@ class SequenceBeamSearch(object):
         }
 
 
-def sequence_beam_search(symbols_to_logits_fn, initial_ids, initial_cache,
-                         vocab_size, beam_size, alpha, max_decode_length,
-                         eos_id):
-    """Search for sequence of subtoken ids with the largest probability.
-
-  Args:
-    symbols_to_logits_fn: A function that takes in ids, index, and cache as
-      arguments. The passed in arguments will have shape:
-        ids -> [batch_size * beam_size, index]
-        index -> [] (scalar)
-        cache -> nested dictionary of tensors [batch_size * beam_size, ...]
-      The function must return logits and new cache.
-        logits -> [batch * beam_size, vocab_size]
-        new cache -> same shape/structure as inputted cache
-    initial_ids: Starting ids for each batch item.
-      int32 tensor with shape [batch_size]
-    initial_cache: dict containing starting decoder variables information
-    vocab_size: int size of tokens
-    beam_size: int number of beams
-    alpha: float defining the strength of length normalization
-    max_decode_length: maximum length to decoded sequence
-    eos_id: int id of eos token, used to determine when a sequence has finished
-
-  Returns:
-    Top decoded sequences [batch_size, beam_size, max_decode_length]
-    sequence scores [batch_size, beam_size]
-  """
-    batch_size = tf.shape(input=initial_ids)[0]
-    sbs = SequenceBeamSearch(symbols_to_logits_fn, vocab_size, batch_size,
-                             beam_size, alpha, max_decode_length, eos_id)
-    return sbs.search(initial_ids, initial_cache)
+# def sequence_beam_search(symbols_to_logits_fn, initial_ids, initial_cache,
+#                          vocab_size, beam_size, alpha, max_decode_length,
+#                          eos_id):
+#     """Search for sequence of subtoken ids with the largest probability.
+#
+#   Args:
+#     symbols_to_logits_fn: A function that takes in ids, index, and cache as
+#       arguments. The passed in arguments will have shape:
+#         ids -> [batch_size * beam_size, index]
+#         index -> [] (scalar)
+#         cache -> nested dictionary of tensors [batch_size * beam_size, ...]
+#       The function must return logits and new cache.
+#         logits -> [batch * beam_size, vocab_size]
+#         new cache -> same shape/structure as inputted cache
+#     initial_ids: Starting ids for each batch item.
+#       int32 tensor with shape [batch_size]
+#     initial_cache: dict containing starting decoder variables information
+#     vocab_size: int size of tokens
+#     beam_size: int number of beams
+#     alpha: float defining the strength of length normalization
+#     max_decode_length: maximum length to decoded sequence
+#     eos_id: int id of eos token, used to determine when a sequence has finished
+#
+#   Returns:
+#     Top decoded sequences [batch_size, beam_size, max_decode_length]
+#     sequence scores [batch_size, beam_size]
+#   """
+#     batch_size = tf.shape(input=initial_ids)[0]
+#     sbs = SequenceBeamSearch(symbols_to_logits_fn, vocab_size, batch_size,
+#                              beam_size, alpha, max_decode_length, eos_id)
+#     return sbs.search(initial_ids, initial_cache)
 
 
 def _log_prob_from_logits(logits):
-    return logits - tf.reduce_logsumexp(input_tensor=logits, axis=2, keepdims=True)
+    return logits - tf.reduce_logsumexp(
+        input_tensor=logits, axis=2, keepdims=True)
 
 
 def _length_normalization(alpha, length):
@@ -559,3 +565,93 @@ def _gather_topk_beams(nested, score_or_log_prob, batch_size, beam_size):
     """Gather top beams from nested structure."""
     _, topk_indexes = tf.nn.top_k(score_or_log_prob, k=beam_size)
     return _gather_beams(nested, topk_indexes, batch_size, beam_size)
+
+
+class SequenceBeamSearchV2(SequenceBeamSearch):
+    """Implementation of beam search loop in v2."""
+
+    def search(self, initial_ids, initial_cache):
+        """Beam search for sequences with highest scores."""
+        state, state_shapes = self._create_initial_state(
+            initial_ids, initial_cache)
+        import pdb; pdb.set_trace()
+        finished_state = tf.while_loop(
+            self._continue_search,
+            self._search_step,
+            loop_vars=[state],
+            shape_invariants=[state_shapes],
+            parallel_iterations=1,
+            back_prop=False)
+        finished_state = finished_state[0]
+
+        alive_seq = finished_state[_StateKeys.ALIVE_SEQ]
+        alive_log_probs = finished_state[_StateKeys.ALIVE_LOG_PROBS]
+        finished_seq = finished_state[_StateKeys.FINISHED_SEQ]
+        finished_scores = finished_state[_StateKeys.FINISHED_SCORES]
+        finished_flags = finished_state[_StateKeys.FINISHED_FLAGS]
+
+        # 2.0 changes tf.where behavior. Should make parameters broadcastable.
+        finished_cond = tf.reduce_any(finished_flags, 1, name="finished_cond")
+        seq_cond = _expand_to_same_rank(finished_cond, finished_seq)
+        score_cond = _expand_to_same_rank(finished_cond, finished_scores)
+
+        # Account for corner case where there are no finished sequences for a
+        # particular batch item. In that case, return alive sequences for that batch
+        # item.
+        finished_seq = tf.where(seq_cond, finished_seq, alive_seq)
+        finished_scores = tf.where(score_cond, finished_scores,
+                                   alive_log_probs)
+        return finished_seq, finished_scores
+
+
+def sequence_beam_search(symbols_to_logits_fn, initial_ids, initial_cache,
+                         vocab_size, beam_size, alpha, max_decode_length,
+                         eos_id):
+    """Search for sequence of subtoken ids with the largest probability.
+  Args:
+    symbols_to_logits_fn: A function that takes in ids, index, and cache as
+      arguments. The passed in arguments will have shape:
+        ids -> [batch_size * beam_size, index]
+        index -> [] (scalar)
+        cache -> nested dictionary of tensors [batch_size * beam_size, ...]
+      The function must return logits and new cache.
+        logits -> [batch * beam_size, vocab_size]
+        new cache -> same shape/structure as inputted cache
+    initial_ids: Starting ids for each batch item.
+      int32 tensor with shape [batch_size]
+    initial_cache: dict containing starting decoder variables information
+    vocab_size: int size of tokens
+    beam_size: int number of beams
+    alpha: float defining the strength of length normalization
+    max_decode_length: maximum length to decoded sequence
+    eos_id: int id of eos token, used to determine when a sequence has finished
+  Returns:
+    Top decoded sequences [batch_size, beam_size, max_decode_length]
+    sequence scores [batch_size, beam_size]
+  """
+    batch_size = tf.shape(initial_ids)[0]
+    sbs = SequenceBeamSearchV2(symbols_to_logits_fn, vocab_size, batch_size,
+                               beam_size, alpha, max_decode_length, eos_id)
+    return sbs.search(initial_ids, initial_cache)
+
+
+def _expand_to_same_rank(tensor, target):
+    """Expands a given tensor to target's rank to be broadcastable.
+  Args:
+    tensor: input tensor to tile. Shape: [b, d1, ..., da]
+    target: target tensor. Shape: [b, d1, ..., da, ..., dn]
+  Returns:
+    Tiled tensor of shape [b, d1, ..., da, 1, ..., 1] with same rank of target.
+  Raises:
+    ValueError, if the shape rank of rank tensor/target is None.
+  """
+    if tensor.shape.rank is None:
+        raise ValueError("Expect rank for tensor shape, but got None.")
+    if target.shape.rank is None:
+        raise ValueError("Expect rank for target shape, but got None.")
+
+    with tf.name_scope("expand_rank"):
+        diff_rank = target.shape.rank - tensor.shape.rank
+        for _ in range(diff_rank):
+            tensor = tf.expand_dims(tensor, -1)
+        return tensor
