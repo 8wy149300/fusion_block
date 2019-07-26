@@ -58,7 +58,7 @@ class HyperParam:
              clipping=5,
              inference_length=150,
              data_shuffle=1,
-             learning_warmup=1000,
+             learning_warmup=12000,
              dropout=0.4):
 
         self.embedding_size = embedding_size
@@ -110,7 +110,7 @@ class HyperParam:
 
     def large(self,
               embedding_size=64 * 16,
-              batch_size=8,
+              batch_size=16,
               epoch_num=200,
               num_units=64 * 16,
               num_heads=16,
@@ -118,12 +118,12 @@ class HyperParam:
               num_decoder_layers=6,
               max_sequence_length=30,
               epoch=100,
-              lr=0.5,
+              lr=1,
               clipping=5,
               inference_length=30,
               data_shuffle=45000,
               dropout=0.3,
-              learning_warmup=2000):
+              learning_warmup=15000):
 
         self.embedding_size = embedding_size
         self.batch_size = batch_size * 2

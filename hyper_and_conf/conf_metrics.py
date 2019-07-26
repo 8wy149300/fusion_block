@@ -9,7 +9,6 @@ import six
 import unicodedata
 import sys
 import re
-from hyper_and_conf import conf_fn as conf_train
 
 
 def onehot_loss_function(true,
@@ -32,7 +31,7 @@ def onehot_loss_function(true,
     #     logits=pred, labels=true) * mask
     # return tf.reduce_mean(loss)
     logits, labels = pad_tensors_to_same_length(pred, true)
-    print(tf.argmax(logits,axis=-1))
+    print(tf.argmax(logits, axis=-1))
     # Calculate smoothing cross entropy
     with tf.name_scope("smoothing_cross_entropy"):
         confidence = 1.0 - smoothing
@@ -43,7 +42,8 @@ def onehot_loss_function(true,
             depth=vocab_size,
             on_value=confidence,
             off_value=low_confidence)
-        print(soft_targets)
+        if len(logits.get_shape().as_list()) <= 2:
+            logits = tf.one_hot(tf.cast(logits, tf.int32), depth=vocab_size)
         xentropy = tf.nn.softmax_cross_entropy_with_logits(
             logits=logits, labels=soft_targets)
 
@@ -70,11 +70,16 @@ def pad_tensors_to_same_length(x, y, pad_id=0):
     y_length = tf.shape(input=y)[1]
 
     max_length = tf.maximum(x_length, y_length)
-
-    x = tf.pad(
-        tensor=x,
-        paddings=[[0, 0], [0, max_length - x_length], [0, 0]],
-        constant_values=pad_id)
+    if len(x.get_shape().as_list()) > 2:
+        x = tf.pad(
+            tensor=x,
+            paddings=[[0, 0], [0, max_length - x_length], [0, 0]],
+            constant_values=pad_id)
+    else:
+        x = tf.pad(
+            tensor=x,
+            paddings=[[0, 0], [0, max_length - x_length]],
+            constant_values=pad_id)
     y = tf.pad(
         tensor=y,
         paddings=[[0, 0], [0, max_length - y_length]],
@@ -97,50 +102,64 @@ def token_trim(tokens, trim_id, remider=0):
 def compute_wer(translation_corpus, reference_corpus, print_matrix=False):
     try:
         # eos_id = 1
-        reference_corpus = reference_corpus.numpy().tolist()
-        translation_corpus = translation_corpus.numpy().tolist()
+        reference = reference_corpus.numpy().tolist()
+        translation = translation_corpus.numpy().tolist()
     except Exception:
         # eos_id = 1
-        reference_corpus = reference_corpus
-        translation_corpus = translation_corpus
+        reference = reference_corpus
+        translation = translation_corpus
     # for (references, translations) in zip(reference_corpus,
     #                                       translation_corpus):
-    hyp = token_trim(translation_corpus, 1, remider=1)
-    ref = token_trim(reference_corpus, 0)
-    N = len(hyp)
-    M = len(ref)
-    L = np.zeros((N, M))
-    for i in range(0, N):
-        for j in range(0, M):
-            if min(i, j) == 0:
-                L[i, j] = max(i, j)
-            else:
-                deletion = L[i - 1, j] + 1
-                insertion = L[i, j - 1] + 1
-                sub = 1 if hyp[i] != ref[j] else 0
-                substitution = L[i - 1, j - 1] + sub
-                L[i, j] = min(deletion, min(insertion, substitution))
-                # print("{} - {}: del {} ins {} sub {} s {}".format(hyp[i], ref[j], deletion, insertion, substitution, sub))
-        # if print_matrix:
-        #     print("WER matrix ({}x{}): ".format(N, M))
-        #     print(L)
-    score = float(int(L[N - 1, M - 1]) / M)
+    score = 0
+    num = 0
+    for (reference_corpus, translation_corpus) in zip(reference, translation):
+        hyp = token_trim(translation_corpus, 1, remider=1)
+        ref = token_trim(reference_corpus, 0)
+
+        N = len(hyp)
+        M = len(ref)
+        L = np.zeros((N, M))
+        for i in range(0, N):
+            for j in range(0, M):
+                if min(i, j) == 0:
+                    L[i, j] = max(i, j)
+                else:
+                    deletion = L[i - 1, j] + 1
+                    insertion = L[i, j - 1] + 1
+                    sub = 1 if hyp[i] != ref[j] else 0
+                    substitution = L[i - 1, j - 1] + sub
+                    L[i, j] = min(deletion, min(insertion, substitution))
+                    # print("{} - {}: del {} ins {} sub {} s {}".format(hyp[i], ref[j], deletion, insertion, substitution, sub))
+            # if print_matrix:
+            #     print("WER matrix ({}x{}): ".format(N, M))
+            #     print(L)
+        score += float(int(L[N - 1, M - 1]) / M)
+        num += 1
     # batch_score += score
-    return score
+    return score / num
 
 
 def wer_score(logits, labels):
-    logits = tf.argmax(logits, axis=-1)
-    num = tf.shape(logits)[0]
-    data = tf.stack([logits, labels], axis=1)
-    data = tf.cast(data, dtype=tf.float32)
+    if len(logits.get_shape().as_list()) > 2:
+        logits = tf.argmax(logits, axis=-1)
+    else:
+        logits = tf.cast(logits, tf.int64)
+    labels = tf.cast(labels, tf.int64)
 
-    def f(data):
-        wer = tf.py_function(compute_wer, (data[0], data[1]), tf.float32)
-        return wer
+    # data = tf.stack([logits, labels], axis=1)
+    # data = tf.cast(data, dtype=tf.float32)
+    #
+    # def f(data):
+    #     wer = tf.py_function(compute_wer, (data[0], data[1]), tf.float32)
+    #     return wer
+    #
+    # wer = tf.map_fn(f, data)
+    wer = tf.py_function(compute_wer, [labels, logits], tf.float32)
+    return wer, tf.constant(1.)
 
-    wer = tf.map_fn(f, data)
-    return tf.reduce_mean(wer), tf.constant(1.)
+
+def wer_fn(labels, logits):
+    return wer_score(logits, labels)[0]
 
 
 def _get_ngrams_with_counter(segment, max_order):
@@ -177,26 +196,28 @@ def compute_bleu(raw_reference_corpus,
   Returns:
     BLEU score.
   """
-    reference_length = 0
-    translation_length = 0
-    bp = 1.0
-    geo_mean = 0
-
-    matches_by_order = [0] * max_order
-    possible_matches_by_order = [0] * max_order
-    precisions = []
     try:
         # eos_id = eos_id.numpy()
         # eos_id = 1
-        reference_corpus = [raw_reference_corpus.numpy().tolist()]
-        translation_corpus = [raw_translation_corpus.numpy().tolist()]
+        reference_corpus = raw_reference_corpus.numpy().tolist()
+        translation_corpus = raw_translation_corpus.numpy().tolist()
     except Exception:
         eos_id = eos_id
         # eos_id = 1
-        reference_corpus = [raw_reference_corpus]
-        translation_corpus = [raw_translation_corpus]
+        reference_corpus = raw_reference_corpus
+        translation_corpus = raw_translation_corpus
+    num = 0
+    bleu = 0
     for (references, translations) in zip(reference_corpus,
                                           translation_corpus):
+        reference_length = 0
+        translation_length = 0
+        bp = 1.0
+        geo_mean = 0
+
+        matches_by_order = [0] * max_order
+        possible_matches_by_order = [0] * max_order
+        precisions = []
         references = token_trim(references, 0)
         translations = token_trim(translations, 1, remider=1)
         # references = data_manager.decode(references).split(' ')
@@ -216,46 +237,56 @@ def compute_bleu(raw_reference_corpus,
             possible_matches_by_order[len(ngram) -
                                       1] += translation_ngram_counts[ngram]
 
-    precisions = [0] * max_order
-    smooth = 1.0
+        precisions = [0] * max_order
+        smooth = 1.0
 
-    for i in xrange(0, max_order):
-        if possible_matches_by_order[i] > 0:
-            precisions[i] = float(
-                matches_by_order[i]) / possible_matches_by_order[i]
-            if matches_by_order[i] > 0:
+        for i in xrange(0, max_order):
+            if possible_matches_by_order[i] > 0:
                 precisions[i] = float(
                     matches_by_order[i]) / possible_matches_by_order[i]
+                if matches_by_order[i] > 0:
+                    precisions[i] = float(
+                        matches_by_order[i]) / possible_matches_by_order[i]
+                else:
+                    smooth *= 2
+                    precisions[i] = 1.0 / (
+                        smooth * possible_matches_by_order[i])
             else:
-                smooth *= 2
-                precisions[i] = 1.0 / (smooth * possible_matches_by_order[i])
-        else:
-            precisions[i] = 0.0
+                precisions[i] = 0.0
 
-    if max(precisions) > 0:
-        p_log_sum = sum(math.log(p) for p in precisions if p)
-        geo_mean = math.exp(p_log_sum / max_order)
+        if max(precisions) > 0:
+            p_log_sum = sum(math.log(p) for p in precisions if p)
+            geo_mean = math.exp(p_log_sum / max_order)
 
-    if use_bp:
-        ratio = translation_length / reference_length
-        bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
-    bleu = geo_mean * bp
-    return np.float32(bleu)
+        if use_bp:
+            ratio = translation_length / reference_length
+            bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
+        bleu += geo_mean * bp
+        num += 1
+    return np.float32(bleu / num)
 
 
 def approx_bleu(logits, labels):
-    logits = tf.argmax(logits, axis=-1)
+    if len(logits.get_shape().as_list()) > 2:
+        logits = tf.argmax(logits, axis=-1)
+    else:
+        logits = tf.cast(logits, tf.int64)
+    labels = tf.cast(labels, tf.int64)
     # num = tf.shape(logits)[0]
-    data = tf.stack([labels, logits], axis=1)
-    data = tf.cast(data, dtype=tf.float32)
+    # data = tf.stack([labels, logits], axis=1)
+    # data = tf.cast(data, dtype=tf.float32)
+    #
+    # def f(data):
+    #     bleu = tf.py_function(compute_bleu, (data[0], data[1]), tf.float32)
+    #     return bleu * 100
+    #
+    # score = tf.map_fn(f, data)
+    score = tf.py_function(compute_bleu, [labels, logits], tf.float32)
+    return score * 100, tf.constant(1.)
 
-    def f(data):
-        bleu = tf.py_function(compute_bleu, (data[0], data[1]), tf.float32)
-        return bleu * 100
 
-    score = tf.map_fn(f, data)
-    return tf.reduce_mean(score), tf.constant(1.)
-
+def bleu_fn(labels, logits):
+    return approx_bleu(logits, labels)[0]
 
 
 class UnicodeRegex(object):
@@ -376,3 +407,15 @@ def padded_sequence_accuracy(logits, labels):
         correct_seq = 1.0 - tf.minimum(1.0,
                                        tf.reduce_sum(not_correct, axis=axis))
         return correct_seq, tf.constant(1.0)
+
+
+# a = tf.convert_to_tensor([[2, 2, 3, 1, 0, 0], [2, 2, 3, 1, 0, 0]])
+# b = tf.convert_to_tensor([[3, 4, 6, 1, 0, 0],[3, 4, 6, 1, 0, 0]])
+# c = tf.convert_to_tensor([
+#     [2, 2, 2, 134, 234, 123, 3, 2],
+# ])
+# d = tf.convert_to_tensor([[3, 6, 61, 23, 5, 6, 7, 2]])
+# re = tf.convert_to_tensor([[2, 2, 3, 1, 0, 0], [3, 4, 6, 1, 0, 0]])
+# tr = tf.convert_to_tensor([[2, 2, 2, 134, 234, 123, 3, 2],
+#                            [3, 6, 61, 23, 5, 6, 7, 2]])
+# s, c = wer_score(a, b)

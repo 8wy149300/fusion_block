@@ -6,22 +6,25 @@ import core_lip_main
 import core_data_SRCandTGT
 from tensorflow.python.client import device_lib
 import tensorflow as tf
+import numpy as np
 DATA_PATH = sys.path[0]
 SYS_PATH = sys.path[1]
-TRAIN_PATH = '/home/vivalavida/massive_data/lip_reading_data/sentence_level_lrs2'
-C = '/home/vivalavida/massive_data/lip_reading_data/sentence_level_lrs2/main'
+# TRAIN_PATH = '/home/vivalavida/massive_data/lip_reading_data/sentence_level_lrs2'
+# C = '/home/vivalavida/massive_data/lip_reading_data/sentence_level_lrs2/main'
 src_data_path = [DATA_PATH + "/corpus/lip_corpus.txt"]
 
 tgt_data_path = [DATA_PATH + "/corpus/lip_corpus.txt"]
 # TFRECORD = '/home/vivalavida/massive_data/lip_reading_TFRecord/tfrecord_word'
-# TFRECORD = '/home/vivalavida/massive_data/sentence_lip_data_tfrecord_v3'
-# TFRECORD = '/home/vivalavida/massive_data/lr_train'
+# TFRECORD = '/home/vivalavida/massive_data/sentence_lip_data_tfrecord_train_v1'
+TFRECORD = '/home/vivalavida/massive_data/lr_train'
+
+TFRECORD = '/home/wonderwall/data/lr_train'
 
 # TFRECORD = '/home/vivalavida/massive_data/fc1'
 
 # TFRECORD = '/data'
 
-TFRECORD = '/Users/barid/Documents/workspace/batch_data/'
+# TFRECORD = '/Users/barid/Documents/workspace/batch_data/'
 
 
 def get_vgg(self):
@@ -106,16 +109,31 @@ def input_fn(flag="TRAIN"):
     return dataset
 
 
+def map_data_for_feed_pertunated(x, y):
+    return ((x, randomly_pertunate_input(y)), y)
+
+
 def map_data_for_feed(x, y):
-    return ((x, y),y)
+    return ((x, y), y)
+
+
+def randomly_pertunate_input(x):
+    determinater = np.random.randint(10)
+    if determinater > 3:
+        return x
+    else:
+        index = np.random.randint(2, size=(1, 80))
+        x = x * index
+    return x
 
 
 def pad_sample(dataset, batch_size):
+    # dataset = dataset.shuffle(200000, reshuffle_each_iteration=True)
     dataset = dataset.padded_batch(
         hp.batch_size,
         (
-            [320, 4096],  # source vectors of unknown size
-            [256]),  # target vectors of unknown size
+            [200, None],  # source vectors of unknown size
+            [80]),  # target vectors of unknown size
         (PAD_ID_float32, PAD_ID_int64),
         drop_remainder=True)
 
@@ -128,17 +146,31 @@ def dataset_prepross_fn(src, tgt, val=False):
     return (src, tgt), tgt
 
 
-def train_input(seq2seq=True):
+def train_input(seq2seq=True, pertunate=False):
+
     dataset = input_fn('TRAIN')
-    # dataset = dataset.shuffle(30000)
+    # dataset = dataset.shuffle(100000)
     dataset = pad_sample(dataset, batch_size=hp.batch_size)
-    dataset = dataset.map(map_data_for_feed)
+
+    if pertunate:
+        dataset = dataset.map(map_data_for_feed_pertunated)
+    else:
+        dataset = dataset.map(map_data_for_feed)
+    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    return dataset
+
+
+def test_input(seq2seq=True, pertunate=False):
+
+    dataset = input_fn('TRAIN')
+    # dataset = dataset.shuffle(100000)
+    dataset = dataset.batch(1)
     dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
     return dataset
 
 
 def val_input(seq2seq=True):
-    dataset = input_fn("VAL")
+    dataset = input_fn("TRAIN")
     dataset = pad_sample(dataset, 4)
     # dataset = dataset.map(map_data_for_val)
     return dataset
@@ -151,7 +183,7 @@ def get_external_loss():
 def model_structure(training=True):
     if training:
         img_input = tf.keras.layers.Input(
-            shape=[None, 4096], dtype=tf.float32, name='VGG_features')
+            shape=[200, 4096], dtype=tf.float32, name='VGG_features')
         tgt = tf.keras.layers.Input(
             shape=[None], dtype=tf.int64, name='target_text')
         # metric = hyper_train.MetricLayer(hp.vocabulary_size)
@@ -170,7 +202,7 @@ def model_structure(training=True):
         model = tf.keras.Model(inputs=[img_input, tgt], outputs=logits)
     else:
         img_input = tf.keras.layers.Input(
-            shape=[None, None], dtype=tf.float32, name='VGG_features')
+            shape=[200, 4096], dtype=tf.float32, name='VGG_features')
         daedalus = core_lip_main.Daedalus(
             hp.max_sequence_length, hp.vocabulary_size, hp.embedding_size,
             hp.batch_size, hp.num_units, hp.num_heads, hp.num_encoder_layers,
@@ -180,7 +212,7 @@ def model_structure(training=True):
         # loss = hyper_train.CrossEntropy(hp.vocabulary_size, 0.1)
         ret = daedalus([img_input], training=training)
         outputs, scores = ret["outputs"], ret["scores"]
-        model = tf.keras.Model(img_input, [outputs, scores])
+        model = tf.keras.Model(img_input, outputs)
     # if multi_gpu and gpu > 0:
     #     model = tf.keras.utils.multi_gpu_model(model, gpus=gpu)
     return model
@@ -209,7 +241,6 @@ def get_callbacks():
         histogram_freq=100,
         write_images=True,
         update_freq=100)
-
     TFchechpoint = tf.keras.callbacks.ModelCheckpoint(
         hp.model_checkpoint_dir + '/model.{epoch:02d}.ckpt',
         save_weights_only=True,

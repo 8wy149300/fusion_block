@@ -129,13 +129,13 @@ class DatasetManager():
 
         def _filter_max_length(example, max_length=150):
             return tf.logical_and(
-                tf.size(input=example[0]) <= 320 * 4096,
+                tf.size(input=example[0]) <= 200 * 4096,
                 tf.greater_equal(example[2], 0.2)[0])
             # tf.greater_equal(example[2], tf.constant(0.1))[0])
 
         def format_data(img, text, ratio):
             return (tf.reshape(img, (-1, 4096)),
-                    tf.cast(text[:256], dtype=tf.int64))
+                    tf.cast(text[:80], dtype=tf.int64))
 
         # dataset = files.apply(
         #     tf.data.experimental.parallel_interleave(
@@ -175,14 +175,13 @@ class DatasetManager():
         return dataset
 
     def get_raw_train_dataset(self):
-        files = tf.data.Dataset.list_files(
-            [
-                self.tfrecord_path + "/fc1/train_TFRecord_*",
-                self.tfrecord_path + "/pretrain/train_TFRecord_*"
-            ],
-            shuffle=True)
+        files = tf.data.Dataset.list_files([
+            self.tfrecord_path + "/fc1/train_TFRecord_*",
+            self.tfrecord_path + "/pretrain/train_TFRecord_*",
+        ],
+                                           shuffle=True)
         # self.tfrecord_path + "/lr_sentence_train/train_TFRecord_*")
-
+        files = files.shuffle(2000)
         return self.create_dataset(files)
 
     def get_raw_val_dataset(self):

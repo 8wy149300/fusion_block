@@ -129,7 +129,8 @@ class Attention(tf.keras.layers.Layer):
         weights = tf.nn.softmax(logits, name="attention_weights")
         if training:
             weights = tf.nn.dropout(weights, rate=self.dropout)
-        attention_output = tf.matmul(weights, v)
+        with  tf.name_scope('attention_output'):
+            attention_output = tf.matmul(weights, v)
 
         # Recombine heads --> [batch_size, length, num_units]
         attention_output = self.combine_heads(attention_output)
@@ -274,7 +275,6 @@ class NormBlock(tf.keras.layers.Layer):
         """Calls wrapped layer with same parameters."""
         # Preprocessing: apply layer normalization
         training = kwargs["training"]
-
         y = self.layer_norm(x)
 
         # Get layer output

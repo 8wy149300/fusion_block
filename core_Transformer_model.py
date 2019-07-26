@@ -2,7 +2,6 @@
 import tensorflow as tf
 from hyper_and_conf import hyper_layer
 
-
 # from tensorflow.python.layers import core as core_layer
 # import numpy as np
 # from hyper_and_conf import hyper_beam_search as beam_search
@@ -40,8 +39,7 @@ class LinearEncoder(tf.keras.layers.Layer):
             self_attention = hyper_layer.SelfAttention(
                 num_heads=self.num_heads,
                 num_units=self.num_units,
-                dropout=self.dropout,
-            )
+                dropout=self.dropout)
             ffn = hyper_layer.Feed_Forward_Network(
                 num_units=4 * self.num_units, dropout=self.dropout)
             self.stacked_encoder.append([
@@ -118,8 +116,7 @@ class LinearDecoder(tf.keras.layers.Layer):
             attention = hyper_layer.Attention(
                 num_heads=self.num_heads,
                 num_units=self.num_units,
-                dropout=self.dropout,
-            )
+                dropout=self.dropout)
             ffn = hyper_layer.Feed_Forward_Network(
                 num_units=4 * self.num_units, dropout=self.dropout)
             self.stacked_decoder.append([

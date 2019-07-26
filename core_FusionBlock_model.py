@@ -3,6 +3,8 @@ import tensorflow as tf
 from hyper_and_conf import hyper_layer
 
 from hyper_and_conf import conf_fn
+from tensorflow.python.keras import regularizers
+L2_WEIGHT_DECAY = 1e-4
 
 
 class Fusion_Block(tf.keras.layers.Layer):
@@ -12,54 +14,91 @@ class Fusion_Block(tf.keras.layers.Layer):
         self.dropout = dropout
 
     def build(self, input_shape):
-        self.concatenation_norm = hyper_layer.LayerNorm()
+        # self.concatenation_norm = hyper_layer.LayerNorm()
+
+        # self.src_1_kernel = tf.keras.layers.Dense(self.num_units, name="src_1")
+        #
+        # self.shared_pre_kernel = tf.keras.layers.Conv1D(
+        #     self.num_units, 3, use_bias=False, padding='same')
 
         self.fusion_kernel = tf.keras.layers.Dense(
-            self.num_units, use_bias=True, activation=tf.nn.relu, name="fusion_kernel"
-        )
-        # self.inputs_projection = tf.keras.layers.Conv1D(
+            self.num_units, name="fusion_kernel", use_bias=False)
+        # self.fusion_kernel = hyper_layer.ResnetIdentityBlock(
+        #     1, (self.num_units, int(self.num_units / 16), self.num_units))
+        # self.pre_mask_id = tf.keras.layers.Conv1D(
+        #     self.num_units, 5, use_bias=False, padding='same')
+        self.FFN_scale = tf.keras.layers.Dense(
+            self.num_units * 4, name="FFN_scale_kernel", use_bias=False)
+        # self.FFN_dense = hyper_layer.ResnetIdentityBlock(
+        #     1, (self.num_units * 2, self.num_units * 8, self.num_units * 2))
+        self.FFN_norm = tf.keras.layers.BatchNormalization()
+        self.FFN_dense = tf.keras.layers.Dense(
+            self.num_units * 2, name="FFN_scale_kernel", use_bias=False)
+        # self.FFN_dense = hyper_layer.ResnetIdentityBlock(
+        #     1, (self.num_units * 2, int(self.num_units / 16) * 2,
+        #         self.num_units * 2))
+        # self.fusion_kernel = tf.keras.layers.Conv1D(
+        #     self.num_units, 5, use_bias=False, padding='same')
+        # self.FFN_dense = tf.keras.layers.Conv1D(
+        #     self.num_units * 2,
+        #     1,
+        #     use_bias=False,
+        #     kernel_initializer='he_normal',
+        #     kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+        #     padding='same')
+        # self.fusion_kernel = tf.keras.layers.Conv1D(
         #     self.num_units,
         #     1,
         #     use_bias=False,
         #     kernel_initializer='he_normal',
-        # )
-        self.inputs_projection = tf.keras.layers.Dense(
-            self.num_units, use_bias=False, name="projection"
-        )
-        self.FFN = hyper_layer.Feed_Forward_Network(self.num_units * 8, self.dropout)
-        self.FNN_block = hyper_layer.NormBlock(self.FFN, self.dropout)
-        self.FFN_post_norm = hyper_layer.LayerNorm()
-        self.res_norm = hyper_layer.LayerNorm()
-        self.res_projection = tf.keras.layers.Dense(
-            self.num_units, use_bias=False, name="res_projection"
-        )
-        self.output_norm = hyper_layer.LayerNorm()
+        #     kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+        #     padding='same')
+        # self.res_norm = hyper_layer.LayerNorm()
+        # self.position_projection = tf.keras.layers.Dense(
+        #     self.num_units * 2, use_bias=False, name="res_projection")
+        # self.FFN_pre_norm = hyper_layer.LayerNorm()
+        self.FFN_post_norm = tf.keras.layers.BatchNormalization()
+        self.output_norm = tf.keras.layers.BatchNormalization()
+
         super(Fusion_Block, self).build(input_shape)
 
-    def call(self, inputs, training=False):
+    def call(self, inputs, padding, training=False):
         src_1, src_2 = inputs
+
         length = tf.shape(input=src_1)[1]
-        img_input_padding = tf.cast(
-            tf.not_equal(tf.reduce_sum(src_1, -1), 0.0), dtype=tf.float32
-        )
-        positional_input = conf_fn.get_position_encoding(length, self.num_units * 2)
-        padding = self.padding(img_input_padding)
+        # positional_input = conf_fn.get_position_encoding(
+        #     length, self.num_units * 2)
+        # src_1 = src_1 + positional_input
+        # src_2 = src_2 + positional_input
+        # src_1 = self.shared_pre_kernel(src_1)
+        # src_2 = self.shared_pre_kernel(src_2)
+
+        padding = self.padding((1 - padding))
         org = tf.concat([src_1, src_2], axis=-1)
-        org = (org + positional_input) * padding
-        org = self.concatenation_norm(org)
-        # we use time major here
-        org = tf.transpose(org, [1, 0, 2])
+        # org = (org + positional_input) * padding
         # FNN block
-        outputs = self.FNN_block(org, training=training)
-        outputs = self.FFN_post_norm(outputs)
-        # For short cut connection
-        org = self.inputs_projection(outputs)
-        res = self.res_projection(self.fusion_kernel(outputs))
+        outputs = org
+        outputs = tf.nn.relu(self.FFN_norm(self.FFN_scale(outputs))) * padding
         if training:
-            res = tf.nn.dropout(res, rate=self.dropout)
-        res = self.output_norm(res + org)
+            outputs = tf.nn.dropout(outputs, rate=self.dropout)
+        outputs = tf.nn.relu(self.FFN_dense(outputs)) * padding
+        outputs = self.FFN_post_norm(outputs) * padding
+        # For short cut connection
+        # org = self.inputs_projection(outputs)
+        # res = self.res_projection(self.fusion_kernel(outputs))
+
+        # res = self.output_norm(outputs) * padding
+        res = tf.nn.relu(outputs) *padding
+
+        if training:
+            outputs = tf.nn.dropout(outputs, rate=self.dropout)
+        res = self.fusion_kernel(res) * padding
+        # if training:
+        #     res = tf.nn.dropout(res, rate=self.dropout)
+        res = self.output_norm(res) * padding
         # back to batch major
-        return tf.transpose(res, [1, 0, 2])
+        return tf.nn.relu(res) * padding
+        # return tf.transpose(res, [1, 0, 2])
 
     def padding(self, padding):
         padding = tf.expand_dims(padding, axis=-1)

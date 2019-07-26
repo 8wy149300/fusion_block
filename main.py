@@ -4,9 +4,7 @@ import sys
 import os
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ[
-    "CUDA_VISIBLE_DEVICES"
-] = (
+os.environ["CUDA_VISIBLE_DEVICES"] = (
     "0,1"
 )  # specify which GPU(s) to be used# os.environ["CUDA_VISIBLE_DEVICES"] = str(init.get_available_gpus())
 # src_data_path = DATA_PATH + "/europarl-v7.fr-en.en"
@@ -14,9 +12,7 @@ os.environ[
 
 import tensorflow as tf
 
-tf.compat.v1.logging.set_verbosity(
-    tf.compat.v1.logging.INFO
-)
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
 from hyper_and_conf import conf_fn
 
 tf.config.threading.set_intra_op_parallelism_threads(12)
@@ -40,20 +36,13 @@ SYS_PATH = sys.path[1]
 # devices = tf.config.experimental_list_devices()
 
 
-def _load_weights_if_possible(
-    self, model, init_weight_path=None
-):
+def _load_weights_if_possible(self, model, init_weight_path=None):
     if init_weight_path:
-        tf.compat.v1.logging.info(
-            "Load weights: {}".format(init_weight_path)
-        )
+        tf.compat.v1.logging.info("Load weights: {}".format(init_weight_path))
         model.load_weights(init_weight_path)
     else:
         tf.compat.v1.logging.info(
-            "Weights not loaded from path:{}".format(
-                init_weight_path
-            )
-        )
+            "Weights not loaded from path:{}".format(init_weight_path))
 
 
 def main():
@@ -61,19 +50,15 @@ def main():
     if num_gpus == 0:
         devices = ["device:CPU:0"]
     else:
-        devices = [
-            "device:GPU:%d" % i for i in range(num_gpus)
-        ]
-    strategy = tf.distribute.MirroredStrategy(
-        devices=devices
-    )
+        devices = ["device:GPU:%d" % i for i in range(num_gpus)]
+    strategy = tf.distribute.MirroredStrategy(devices=devices)
     callbacks = init.get_callbacks()
     loss = init.get_external_loss()
     # train_model = init.test_model()
     with strategy.scope():
         train_model = init.train_model()
         # train_model.load_weights(
-        #     "./model_checkpoint/model.29.ckpt"
+        #     "./log/alpha_v1/model_checkpoint/model.10.ckpt"
         # )
         optimizer = init.get_optimizer()
         train_model.compile(optimizer=optimizer, loss=loss)
@@ -81,13 +66,15 @@ def main():
     train_dataset = init.train_input()
     # print(train_dataset.take(1))
     # train_model.evaluate(train_dataset, verbose=1, callbacks=callbacks)
-    train_model.fit(
-        train_dataset,
-        epochs=100,
-        verbose=1,
-        callbacks=callbacks,
-        shuffle=True,
-    )
+    for i in range(1, 100):
+        train_model.fit(
+            train_dataset,
+            initial_epoch=i - 1,
+            epochs=i,
+            verbose=1,
+            callbacks=callbacks,
+            shuffle=True,
+        )
 
     train_model.save_weights("model_weights")
 
