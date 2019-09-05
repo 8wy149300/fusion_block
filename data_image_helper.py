@@ -11,11 +11,63 @@ import tensorflow as tf
 import numpy as np
 import cv2
 import visualization
+import dlib
+import imutils
+from imutils import face_utils
 
 
 class data_image_helper:
-    def __init__(self, detector):
-        self.detector = detector
+    def __init__(self):
+        # self.detector = detector
+        self.detector = dlib.get_frontal_face_detector()
+        # predictor = dlib.shape_predictor(args["shape_predictor"])
+        #
+        # # load the input image, resize it, and convert it to grayscale
+        # image = cv2.imread(args["image"])
+        self.predictor = dlib.shape_predictor(
+            './pre_train/shape_predictor_68_face_landmarks.dat')
+
+    def mouth_detector(self, frame):
+        # image = imutils.resize(frame, width=500)
+        image = frame
+        image = cv2.GaussianBlur(image, (5, 5), 0)
+        # image = cv2.bilateralFilter(image, 9, 75, 75)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # detect faces in the grayscale image
+        rects = self.detector(gray, 1)
+
+        for (i, rect) in enumerate(rects):
+            # determine the facial landmarks for the face region, then
+            # convert the landmark (x, y)-coordinates to a NumPy array
+            shape = self.predictor(gray, rect)
+            shape = face_utils.shape_to_np(shape)
+
+            # loop over the face parts individually
+            # for (name, (i, j)) in face_utils.FACIAL_LANDMARKS_IDXS.items():
+            name = 'mouth'
+            i = 48
+            j = 68
+            # clone the original image so we can draw on it, then
+            # display the name of the face part on the image
+            clone = image.copy()
+            # cv2.putText(clone, name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+            #             (0, 0, 255), 2)
+
+            # loop over the subset of facial landmarks, drawing the
+            # specific face part
+            for (x, y) in shape[i:j]:
+                cv2.circle(clone, (x, y), 1, (0, 0, 255), -1)
+            # import pdb; pdb.set_trace()
+            # extract the ROI of the face region as a separate image
+            (x, y, w, h) = cv2.boundingRect(np.array([shape[i:j]]))
+            roi = image[y:y + h, x:x + w]
+            try:
+                roi = cv2.resize(roi, (64, 32), cv2.INTER_AREA)
+                # roi = cv2.GaussianBlur(roi, (3, 3), 0)
+            except Exception:
+                return None
+            return roi
 
     def read_img(self, path, shape, size, begin=0, end=0):
         """
@@ -44,11 +96,6 @@ class data_image_helper:
         #     "./cascades/haarcascade_frontalface_default.xml")
         # classifier_face_alt = cv2.CascadeClassifier(
         #     "./cascades/haarcascade_frontalface_alt.xml")
-        classifier_face_alt2 = cv2.CascadeClassifier(
-            "./cascades/haarcascade_frontalface_alt2.xml")
-
-        classifier_mouth = cv2.CascadeClassifier(
-            "./cascades/haarcascade_mcs_mouth.xml")
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, begin * fps)
         pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
@@ -61,191 +108,29 @@ class data_image_helper:
             pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
             if ret == False:
                 break
-            face_alt2 = classifier_face_alt2.detectMultiScale(
-                img, 1.2, 2, cv2.CASCADE_SCALE_IMAGE, (25, 25))
-            faceRects_mouth = classifier_mouth.detectMultiScale(
-                img, 1.2, 2, cv2.CASCADE_SCALE_IMAGE, shape)
-            temp = len(faceRects_mouth)
-            if temp == 1:
-
-                for faceRect_mouth in faceRects_mouth:
-                    xm1, ym1, wm1, hm2 = faceRect_mouth
-                    cv2.rectangle(img, (int(xm1), int(ym1)),
-                                  (int(xm1) + int(wm1), int(ym1) + int(hm2)),
-                                  (0, 0, 255), 2, 0)
-
-                    mouth = img[ym1:(ym1 + hm2), xm1:(xm1 + wm1)]
-                    mouth = cv2.resize(
-                        mouth, size, interpolation=cv2.INTER_CUBIC)
+            img = contrast_enhancement(img)
+            cv2.imwrite('./samples/frame_' + str(cnt) + '.jpg', img)
+            mouth = self.mouth_detector(img)
+            cv2.imwrite('./samples/lip_' + str(cnt)+ '.jpg', mouth)
+            if mouth is not None:
+                if np.sum(mouth) > 0:
                     images.append(mouth)
                     cnt += 1
-            else:
-                faceRects_face = face_alt2
-                if len(faceRects_face) > 0:
-                    # 检测到人脸
-                    for faceRect_face in faceRects_face:
-                        # 获取图像x起点,y起点,宽，高
-                        x, y, w, h = faceRect_face
-                        # 转换类型为int，方便之后图像截取
-                        intx = int(x)
-                        intw = int(w)
-                        # 截取人脸区域下半部分左上角的y起点，以精确识别嘴巴的位置
-                        my = int(float(y + 0.6 * h))
-                        mh = int(0.5 * h)
 
-                        img_facehalf_bottom = img[my:(my + mh), intx:intx + intw]
-                        '''
-                            img获取坐标为，【y,y+h之间（竖）：x,x+w之间(横)范围内的数组】
-                            img_facehalf是截取人脸识别到区域上半部分
-                            img_facehalf_bottom是截取人脸识别到区域下半部分
-                        '''
-                        cv2.rectangle(img, (int(x), my),
-                                      (int(x) + int(w), my + mh), (0, 255, 0), 2,
-                                      0)
-                        '''
-                            矩形画出区域 rectangle参数（图像，左顶点坐标(x,y)，右下顶点坐标（x+w,y+h），线条颜色，线条粗细）
-                            画出人脸识别下部分区域，方便定位
-                        '''
-                        faceRects_mouth = classifier_mouth.detectMultiScale(
-                            img_facehalf_bottom, 1.1, 1, cv2.CASCADE_SCALE_IMAGE,
-                            shape)
-                        if len(faceRects_mouth) > 0:
-                            for faceRect_mouth in faceRects_mouth:
-                                xm1, ym1, wm1, hm2 = faceRect_mouth
-                                cv2.rectangle(
-                                    img_facehalf_bottom, (int(xm1), int(ym1)),
-                                    (int(xm1) + int(wm1), int(ym1) + int(hm2)),
-                                    (0, 0, 255), 2, 0)
-
-                                mouth = img_facehalf_bottom[ym1:(ym1 + hm2), xm1:(
-                                    xm1 + wm1)]
-                                mouth = cv2.resize(
-                                    mouth, size, interpolation=cv2.INTER_CUBIC)
-
-                                images.append(mouth)
-                                cnt += 1
-
-
-            # else:
-            #     face_alt = classifier_face_alt.detectMultiScale(
-            #         img, 1.2, 2, cv2.CASCADE_SCALE_IMAGE, (25, 25))
-            #     if len(face_alt) > 0:
-            #         faceRects_face = face_alt
-            #     else:
-            #         face_default = classifier_face_default.detectMultiScale(
-            #             img, 1.2, 2, cv2.CASCADE_SCALE_IMAGE, (25, 25))
-            #         if len(face_default) > 0:
-            #             faceRects_face = face_default
-            #         else:
-            #             faceRects_mouth = classifier_mouth.detectMultiScale(
-            #                 img, 1.2, 2, cv2.CASCADE_SCALE_IMAGE, shape)
-            #             if len(faceRects_mouth) > 0:
-            #                 for faceRect_mouth in faceRects_mouth:
-            #                     xm1, ym1, wm1, hm2 = faceRect_mouth
-            #                     cv2.rectangle(
-            #                         img, (int(xm1), int(ym1)),
-            #                         (int(xm1) + int(wm1), int(ym1) + int(hm2)),
-            #                         (0, 0, 255), 2, 0)
-            #
-            #                     mouth = img[ym1:(ym1 + hm2), xm1:(xm1 + wm1)]
-            #                     mouth = cv2.resize(
-            #                         mouth, size, interpolation=cv2.INTER_CUBIC)
-            #                     images.append(mouth)
-            #                     cnt += 1
-            #         continue
-            #
-            # key = cv2.waitKey(1)
-            # # 键盘等待
-            # if len(faceRects_face) > 0:
-            #     # 检测到人脸
-            #     for faceRect_face in faceRects_face:
-            #         # 获取图像x起点,y起点,宽，高
-            #         x, y, w, h = faceRect_face
-            #         # 转换类型为int，方便之后图像截取
-            #         intx = int(x)
-            #         intw = int(w)
-            #         # 截取人脸区域下半部分左上角的y起点，以精确识别嘴巴的位置
-            #         my = int(float(y + 0.6 * h))
-            #         mh = int(0.5 * h)
-            #
-            #         img_facehalf_bottom = img[my:(my + mh), intx:intx + intw]
-            #         '''
-            #             img获取坐标为，【y,y+h之间（竖）：x,x+w之间(横)范围内的数组】
-            #             img_facehalf是截取人脸识别到区域上半部分
-            #             img_facehalf_bottom是截取人脸识别到区域下半部分
-            #         '''
-            #         cv2.rectangle(img, (int(x), my),
-            #                       (int(x) + int(w), my + mh), (0, 255, 0), 2,
-            #                       0)
-            #         '''
-            #             矩形画出区域 rectangle参数（图像，左顶点坐标(x,y)，右下顶点坐标（x+w,y+h），线条颜色，线条粗细）
-            #             画出人脸识别下部分区域，方便定位
-            #         '''
-            #         faceRects_mouth = classifier_mouth.detectMultiScale(
-            #             img_facehalf_bottom, 1.1, 1, cv2.CASCADE_SCALE_IMAGE,
-            #             shape)
-            #         if len(faceRects_mouth) > 0:
-            #             for faceRect_mouth in faceRects_mouth:
-            #                 xm1, ym1, wm1, hm2 = faceRect_mouth
-            #                 cv2.rectangle(
-            #                     img_facehalf_bottom, (int(xm1), int(ym1)),
-            #                     (int(xm1) + int(wm1), int(ym1) + int(hm2)),
-            #                     (0, 0, 255), 2, 0)
-            #
-            #                 mouth = img_facehalf_bottom[ym1:(ym1 + hm2), xm1:(
-            #                     xm1 + wm1)]
-            #                 mouth = cv2.resize(
-            #                     mouth, size, interpolation=cv2.INTER_CUBIC)
-            #
-            #                 images.append(mouth)
-            #                 cnt += 1
-            #                 # cv2.imshow('video', mouth)
-            #                 # if cnt % 10 == 0:
-            #                 #     cv2.imwrite(str(cnt) + 'xx.jpg', mouth)
-            #
-            # if (key == ord('q')):
-            #     break
-            #
         cap.release()
         cv2.destroyAllWindows()
         return images, cnt / frames
 
-    # def prepare_data(self,
-    #                  path,
-    #                  batch_size,
-    #                  time_step,
-    #                  shape = (20, 20),
-    #                  size = (109, 109),
-    #                  read = True):
-    #     if(read):
-    #         self.read_img(path, shape, size)
-
-    #     DataSet = []
-    #     Buffers = [None] * time_step
-    #     cnt = 0
-
-    #     for image in self.images:
-    #         cnt += 1
-    #         for i in range(time_step):
-    #             Buffers[time_step -i - 1] = Buffers[time_step - i - 2]
-    #         Buffers[0] = image
-
-    #         if(cnt >= time_step):
-    #             DataSet.append(Buffers.copy())
-
-    #     # DataSet = DataSet / 255.0
-    #     # DataSet = DataSet.astype(np.float32)
-
-    #     batch_dataset = tf.data.Dataset.from_tensor_slices(DataSet)
-    #     batch_dataset = batch_dataset.batch(batch_size)
-
-    #     return batch_dataset, self.images
-
-    def get_raw_dataset(self, path, shape=(20, 20), size=(224, 224)):
+    def get_raw_dataset(self, path, shape=(8, 8), size=(32, 32)):
 
         video, cnt = self.read_img(path, shape, size, 0, 0)
-        video = np.array(video) / 255.0
-        video = video.astype(np.float32)
+        # import pdb
+        # pdb.set_trace()
+        video = np.array(video, np.float32)
+        # video = tf.keras.applications.resnet50.preprocess_input(video, mode='tf')
+        # for k, v in enumerate(video):
+        #     cv2.imshow('image', v)
+        #     cv2.waitKey()
         return video, cnt
         # return tf.data.Dataset.from_generator(generator, tf.float32)
 
@@ -280,17 +165,42 @@ class data_image_helper:
         return batch_dataset, raw_dataset
 
 
+def contrast_enhancement(img):
+    # img = cv2.resize(img, (300,300), interpolation =cv2.INTER_AREA)
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    # cv2.imshow("lab",lab)
+
+    #-----Splitting the LAB image to different channels-------------------------
+    l, a, b = cv2.split(lab)
+    # cv2.imshow('l_channel', l)
+    # cv2.imshow('a_channel', a)
+    # cv2.imshow('b_channel', b)
+
+    #-----Applying CLAHE to L-channel-------------------------------------------
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    # cv2.imshow('CLAHE output', cl)
+
+    #-----Merge the CLAHE enhanced L-channel with the a and b channel-----------
+    limg = cv2.merge((cl, a, b))
+    # cv2.imshow('limg', limg)
+
+    #-----Converting image from LAB Color model to RGB model--------------------
+    final = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    return final
+
+
 # if __name__ == '__main__':
 # video, txt = fh.read_file(
 #     '/Users/barid/Documents/workspace/batch_data/lip_data')
 # print(video[:5])
 # print(txt[:5])
-# helper = data_image_helper(detector='./cascades/')
-# # b, d = helper.prepare_data(paths = ['D:/lip_data/ABOUT/train/ABOUT_00003.mp4'], batch_size = 64)
-# b, cnt = helper.get_raw_dataset(
-#     path=
-#     '/Users/barid/Documents/workspace/batch_data/5550881446804971382/00012.mp4'
-# )
+helper = data_image_helper()
+# b, d = helper.prepare_data(paths = ['D:/lip_data/ABOUT/train/ABOUT_00003.mp4'], batch_size = 64)
+b, cnt = helper.get_raw_dataset(
+    path=
+    '/Users/barid/Documents/workspace/batch_data/5550881446804971382/00012.mp4'
+)
 # print(b.shape)
 # print(cnt)
 #for (i,(x, l)) in enumerate(b):

@@ -5,6 +5,36 @@ import tensorflow as tf
 _NEG_INF = -1e9
 
 
+def get_position_encoding(length,
+                          hidden_size,
+                          min_timescale=1.0,
+                          max_timescale=1.0e4):
+    """Return positional encoding.
+  Calculates the position encoding as a mix of sine and cosine functions with
+  geometrically increasing wavelengths.
+  Defined and formulized in Attention is All You Need, section 3.5.
+  Args:
+    length: Sequence length.
+    hidden_size: Size of the
+    min_timescale: Minimum scale that will be applied at each position
+    max_timescale: Maximum scale that will be applied at each position
+  Returns:
+    Tensor with shape [length, hidden_size]
+  """
+    position = tf.cast(tf.range(length), tf.float32)
+    num_timescales = hidden_size // 2
+    log_timescale_increment = (
+        math.log(float(max_timescale) / float(min_timescale)) /
+        (tf.cast(num_timescales, tf.float32) - 1))
+    inv_timescales = min_timescale * tf.exp(
+        tf.cast(tf.range(num_timescales), tf.float32) *
+        -log_timescale_increment)
+    scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(
+        inv_timescales, 0)
+    signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
+    return signal
+
+
 def get_decoder_self_attention_bias(length):
     """Calculate bias for decoder that maintains model's autoregressive property.
   Creates a tensor that masks out locations that correspond to illegal

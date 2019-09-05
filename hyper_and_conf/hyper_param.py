@@ -45,10 +45,10 @@ class HyperParam:
             self.large()
 
     def test(self,
-             embedding_size=16,
+             embedding_size=8,
              batch_size=8,
              epoch_num=5,
-             num_units=16,
+             num_units=8,
              num_heads=2,
              num_encoder_layers=2,
              num_decoder_layers=2,
@@ -118,12 +118,12 @@ class HyperParam:
               num_decoder_layers=6,
               max_sequence_length=30,
               epoch=100,
-              lr=1,
+              lr=0.1,
               clipping=5,
               inference_length=30,
               data_shuffle=45000,
               dropout=0.3,
-              learning_warmup=15000):
+              learning_warmup=50000):
 
         self.embedding_size = embedding_size
         self.batch_size = batch_size * 2

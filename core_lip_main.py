@@ -1,52 +1,86 @@
 # encoding=utf8
 import tensorflow as tf
-from core_Transformer_model import LinearEncoder, LinearDecoder
+from core_resTransformer import ResLinearEncoder, LinearDecoder
+from core_Transformer_model import LinearEncoder
 from hyper_and_conf import hyper_layer
 from hyper_and_conf import hyper_beam_search as beam_search
 import numpy as np
 # from hyper_and_conf import hyper_param
-from core_FusionBlock_model import Fusion_Block
+# from tensorflow.python.keras import initializers
 from hyper_and_conf import hyper_util, conf_fn
-
+# from tensorflow.python.keras import regularizers
 L2_WEIGHT_DECAY = 1e-4
+BATCH_NORM_DECAY = 0.9
+BATCH_NORM_EPSILON = 1e-5
 
+GPU = conf_fn.get_available_gpus() if conf_fn.get_available_gpus() > 0 else 1
 
-# tf.enable_eager_execution()
-class VGG_POST(tf.keras.layers.Layer):
-    def __init__(self, num_units, dropout):
-        self.num_units = num_units
-        self.dropout = dropout
-        super(VGG_POST, self).__init__()
+# PADDED_IMG = 150
+# PADDED_TEXT = 80
+PADDED_IMG = 50
+PADDED_TEXT = 1
 
-    def build(self, input_shape):
-        self.vgg_dense_1 = tf.keras.layers.Dense(
-            self.num_units * 2, use_bias=False, name="vgg_dense_1")
-        self.pre_norm = tf.keras.layers.BatchNormalization()
-        self.out_norm = tf.keras.layers.BatchNormalization()
+FEATURE_IMG = 32 * 64 * 3
 
-        self.vgg_dense_2 = tf.keras.layers.Dense(
-            self.num_units, name="vgg_dense_2", use_bias=False)
-        super(VGG_POST, self).build(input_shape)
-
-    def call(self, inputs, padding, training=False):
-        length = tf.shape(input=inputs)[1]
-        batch = tf.shape(input=inputs)[0]
-        inputs = tf.reshape(inputs, [-1, 4096])
-        inputs = self.pre_norm(inputs)
-        padding = tf.reshape(self.padding((1 - padding)), [-1, 1])
-        inputs = tf.nn.relu(self.vgg_dense_1(inputs)) * padding
-        if training:
-            inputs = tf.nn.dropout(inputs, rate=self.dropout)
-        inputs = tf.nn.relu(self.out_norm(self.vgg_dense_2(inputs))) * padding
-        inputs = tf.reshape(inputs, [batch, -1, self.num_units])
-        return inputs
-
-    def padding(self, padding):
-        padding = tf.expand_dims(padding, axis=-1)
-        return padding
-
-    def get_config(self):
-        return {"num_units": self.num_units, "dropout": self.dropout}
+# class Shared_Projection(tf.keras.layers.Layer):
+#     def __init__(self, num_units):
+#         super(Shared_Projection, self).__init__()
+#         self.num_units = num_units
+#         self.shared_projection = self.add_weight(
+#             shape=[self.num_units, self.num_units],
+#             dtype="float32",
+#             name="shared",
+#             initializer=tf.random_normal_initializer(
+#                 mean=0., stddev=self.num_units**-0.5))
+#
+#     def build(self, input_shape):
+#         super(Shared_Projection, self).build(input_shape)
+#
+#     def call(self, inputs, training, transpose=False):
+#         length = tf.shape(inputs)[1]
+#         inputs = tf.reshape(inputs, [-1, self.num_units])
+#         inputs = tf.matmul(
+#             inputs, self.shared_projection, transpose_b=transpose)
+#         inputs = tf.reshape(inputs, [-1, length, self.num_units])
+#         return inputs
+#
+#     def get_config(self):
+#         return {"num_units": self.num_units}
+#
+#
+# class IMG_POST(tf.keras.layers.Layer):
+#     def __init__(self, num_units, dropout):
+#         self.num_units = num_units
+#         self.dropout = dropout
+#         super(IMG_POST, self).__init__()
+#
+#     def build(self, input_shape):
+#         self.extra_norm = tf.keras.layers.BatchNormalization(
+#             axis=-1,
+#             momentum=BATCH_NORM_DECAY,
+#             epsilon=BATCH_NORM_EPSILON,
+#         )
+#         self.out_weights = self.add_weight(
+#             shape=[1024, self.num_units],
+#             dtype="float32",
+#             name="out_weights",
+#             initializer=tf.random_normal_initializer(
+#                 mean=0., stddev=self.num_units**-0.5))
+#
+#         super(IMG_POST, self).build(input_shape)
+#
+#     def call(self, inputs, padding=None, training=False):
+#
+#         inputs = self.extra_norm(inputs)
+#         inputs = tf.matmul(inputs, self.out_weights) * 64**-0.5
+#         return inputs
+#
+#     def padding(self, padding):
+#         padding = tf.expand_dims(padding, axis=-1)
+#         return padding
+#
+#     def get_config(self):
+#         return {"num_units": self.num_units, "dropout": self.dropout}
 
 
 class Daedalus(tf.keras.Model):
@@ -84,7 +118,8 @@ class Daedalus(tf.keras.Model):
             pad_id=self.PAD_ID,
             name="word_embedding",
         )
-        self.stacked_encoder = LinearEncoder(
+
+        self.res_encoder = ResLinearEncoder(
             self.max_seq_len,
             self.vocabulary_size,
             self.embedding_size,
@@ -96,7 +131,22 @@ class Daedalus(tf.keras.Model):
             self.EOS_ID,
             self.PAD_ID,
         )
-        # self.temp = self.get_encoder(self)
+        # self.stacked_encoder.load_weights(
+        #     tf.train.latest_checkpoint("/home/vivalavida/massive_data/model_checkpoint/model.10.ckpt"))
+        self.stacked_encoder = LinearEncoder(
+            self.max_seq_len,
+            self.vocabulary_size,
+            self.embedding_size,
+            self.batch_size,
+            self.num_units,
+            self.num_heads,
+            6,
+            self.dropout,
+            self.EOS_ID,
+            self.PAD_ID,
+        )
+        # self.extra_encoder.load_weights(
+        #     tf.train.latest_checkpoint("/home/vivalavida/massive_data/model_checkpoint/"))
         self.stacked_decoder = LinearDecoder(
             self.max_seq_len,
             self.vocabulary_size,
@@ -109,37 +159,28 @@ class Daedalus(tf.keras.Model):
             self.EOS_ID,
             self.PAD_ID,
         )
-        self.input_norm = hyper_layer.LayerNorm()
-        self.norm = hyper_layer.LayerNorm()
-        self.norm_mask = hyper_layer.LayerNorm()
-        self.norm_fusion = hyper_layer.LayerNorm()
 
-        self.vgg_post = VGG_POST(self.num_units, self.dropout)
-        self.post = tf.keras.layers.Dense(self.num_units, use_bias=True)
-
-    def call(self, inputs, training):
+    def call(self, inputs, training, mode='LIP'):
         if len(inputs) == 2:
             img_input, tgt_input = inputs[0], inputs[1]
         else:
             img_input, tgt_input = inputs[0], None
-
+        # batch_size = tf.shape(input=img_input)[0]
         with tf.name_scope("lip_reading"):
-            img_input_padding = tf.cast(
-                tf.equal(tf.reduce_sum(img_input, -1), 0.0), dtype=tf.float32)
-            mask_id = self.MASK_ID
-            mask_words = tf.cast((1 - img_input_padding) * mask_id, tf.int32)
-            mask_embedding = self.embedding_block(mask_words)
-            Q = self.vgg_post(
-                img_input, padding=img_input_padding, training=training)
-            attention_bias = self.padding_bias(img_input_padding)
+            Q = img_input
             if training:
-                mask_embedding = tf.nn.dropout(mask_embedding, rate=0.1)
-            Q = self.fusion_block((Q, mask_embedding),
-                                  img_input_padding,
-                                  training=training)
-            if training:
-                Q = tf.nn.dropout(Q, rate=self.dropout)
-            encoder_outputs = self.encode(Q, attention_bias, training)
+                img_input_padding = tf.reshape(Q,
+                                               [-1, PADDED_IMG, FEATURE_IMG])
+            else:
+                img_input_padding = tf.reshape(Q, [-1, 1, FEATURE_IMG])
+            img_input_padding = tf.reduce_sum(img_input_padding, -1)
+            attention_bias = hyper_util.get_padding_bias(img_input_padding)
+            if mode == 'LIP':
+                Q = self.res_encoder(
+                    Q, attention_bias=attention_bias, training=training)
+            # attention_bias = hyper_util.get_padding_bias(img_input)
+            encoder_outputs = self.encode(
+                Q, attention_bias, training, mode=mode)
             if tgt_input is None:
                 return self.inference(encoder_outputs, attention_bias,
                                       training)
@@ -148,10 +189,12 @@ class Daedalus(tf.keras.Model):
                                      attention_bias, training)
                 return logits
 
-    def encode(self, inputs, attention_bias, training):
+    def encode(self, inputs, attention_bias, training, mode='LIP'):
         with tf.name_scope("encode"):
             ##############
             with tf.name_scope("add_pos_encoding"):
+                if mode != 'LIP':
+                    inputs = self.embedding_block(inputs)
                 length = tf.shape(inputs)[1]
                 pos_encoding = conf_fn.get_position_encoding(
                     length, self.num_units)
@@ -160,16 +203,23 @@ class Daedalus(tf.keras.Model):
                 encoder_inputs = tf.nn.dropout(
                     encoder_inputs, rate=self.dropout)
             # print(tf.reduce_sum(encoder_inputs, [1, 2]))
-            return self.stacked_encoder(
-                encoder_inputs, attention_bias, training=training)
+            encoder = self.stacked_encoder(
+                encoder_inputs,
+                attention_bias=attention_bias,
+                training=training)
+            return encoder
+
     def decode(self, targets, encoder_outputs, attention_bias, training):
         with tf.name_scope("decode"):
             decoder_inputs = targets
-            with tf.name_scope("shift_targets"):
-                decoder_inputs = tf.pad(
-                    decoder_inputs, [[0, 0], [1, 0]],
-                    constant_values=0)[:, :-1]
             decoder_inputs = self.embedding_block(decoder_inputs)
+            with tf.name_scope("shift_targets"):
+                # decoder_inputs = tf.pad(
+                #     decoder_inputs, [[0, 0], [1, 0], [0, 0]],
+                #     constant_values=0)[:, :-1, :]
+
+                # for word training
+                decoder_inputs = tf.zeros_like(decoder_inputs)
             with tf.name_scope("add_pos_encoding"):
                 length = tf.shape(decoder_inputs)[1]
                 decoder_inputs += conf_fn.get_position_encoding(
@@ -186,7 +236,17 @@ class Daedalus(tf.keras.Model):
                 attention_bias,
                 training=training,
             )
-
+            # for i, layer in enumerate(self.embeding_att):
+            #     org = outputs
+            #     in_project = layer[0]
+            #     out_project = layer[1]
+            #     norm = layer[2]
+            #     outputs = in_project(norm(outputs))
+            #     outputs = self.embedding_block.att_shared_weights(outputs)
+            #     outputs = out_project(outputs)
+            #     outputs = org + outputs
+            #     # org = encoder_inputs
+            # outputs = self.x_encode_norm(outputs)
             logits = self.embedding_block.linear(outputs)
             return logits
 

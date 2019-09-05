@@ -6,6 +6,194 @@ BATCH_NORM_DECAY = 0.9
 BATCH_NORM_EPSILON = 1e-5
 
 
+class Pixel_Self_Att(tf.keras.layers.Layer):
+    def __init__(self, num_units, num_heads, dropout):
+        """Initialize Attention.
+    Args:
+      num_units: int, output dim of hidden layer.
+      num_heads: int, number of heads to repeat the same attention structure.
+      attention_dropout: float, dropout rate inside attention for training.
+    """
+        if num_units % num_heads:
+            raise ValueError(
+                "Hidden size ({}) must be divisible by the number of heads ({})."
+                .format(num_units, num_heads))
+
+        super(Pixel_Self_Att, self).__init__()
+        self.num_units = num_units
+        self.num_heads = num_heads
+        self.dropout = dropout
+
+    def build(self, input_shape):
+        """Builds the layer."""
+        # Layers for linearly projecting the queries, keys, and values.
+        depth = self.num_units // self.num_heads
+        # self.q_dense_layer = tf.keras.layers.Dense(
+        #     self.num_units, use_bias=False, name="q")
+        # self.k_dense_layer = tf.keras.layers.Dense(
+        #     self.num_units, use_bias=False, name="k")
+        # self.v_dense_layer = tf.keras.layers.Dense(
+        #     self.num_units, use_bias=False, name="v")
+        self.time_output_dense_layer = tf.keras.layers.Dense(
+            self.num_units, use_bias=False, name="output_transform")
+        # self.img_output_dense_layer = tf.keras.layers.Dense(
+        #     self.num_units, use_bias=False, name="output_transform")
+        # self.time_multi_heads = []
+        # for i in range(self.num_heads):
+        #     q_dense_layer = tf.keras.layers.Dense(
+        #         depth, use_bias=False, name="q")
+        #     k_dense_layer = tf.keras.layers.Dense(
+        #         depth, use_bias=False, name="k")
+        #     v_dense_layer = tf.keras.layers.Dense(
+        #         depth, use_bias=False, name="v")
+        #     self.time_multi_heads.append(
+        #         [q_dense_layer, k_dense_layer, v_dense_layer])
+        self.q_dense_layer = tf.keras.layers.Dense(
+            self.num_units, use_bias=False, name="q")
+        self.k_dense_layer = tf.keras.layers.Dense(
+            self.num_units, use_bias=False, name="k")
+        self.v_dense_layer = tf.keras.layers.Dense(
+            self.num_units, use_bias=False, name="v")
+        self.output_dense_layer = tf.keras.layers.Dense(
+            self.num_units, use_bias=False, name="output_transform")
+
+        super(Pixel_Self_Att, self).build(input_shape)
+
+    def get_config(self):
+        return {
+            "num_units": self.num_units,
+            "num_heads": self.num_heads,
+            "dropout": self.dropout,
+        }
+
+    def split_heads(self, x, length_prior=True):
+        """Split x into different heads, and transpose the resulting value.
+    The tensor is transposed to insure the inner dimensions hold the correct
+    values during the matrix multiplication.
+    Args:
+      x: A tensor with shape [batch_size, length, num_units]
+    Returns:
+      A tensor with shape [batch_size, num_heads, length, num_units/num_heads]
+    """
+        with tf.name_scope("split_heads"):
+            batch_size = tf.shape(x)[0]
+            length = tf.shape(x)[1]
+            img_size = tf.shape(x)[2]
+
+            # Calculate depth of last dimension after it has been split.
+            depth = (self.num_units // self.num_heads)
+
+            # Split the last dimension
+            x = tf.reshape(
+                x, [batch_size, length, img_size, self.num_heads, depth])
+
+            # Transpose the result
+            if length_prior:
+                return tf.transpose(x, [0, 3, 2, 1, 4])
+            else:
+                return tf.transpose(x, [0, 3, 1, 2, 4])
+
+    def combine_heads(self, x, length_prior=True):
+        """Combine tensor that has been split.
+    Args:
+      x: A tensor [batch_size, num_heads, length, num_units/num_heads]
+    Returns:
+      A tensor with shape [batch_size, length, num_units]
+    """
+        with tf.name_scope("combine_heads"):
+            batch_size = tf.shape(x)[0]
+            if length_prior:
+                length = tf.shape(x)[-2]
+                img_size = tf.shape(x)[-3]
+                x = tf.transpose(
+                    x,
+                    [0, 3, 2, 1, 4])  # --> [batch, length, num_heads, depth]
+            else:
+                length = tf.shape(x)[-3]
+                img_size = tf.shape(x)[-2]
+
+                x = tf.transpose(x, [0, 2, 3, 1, 4])
+            return tf.reshape(x, [batch_size, length, -1, self.num_units])
+
+    def call(self, x, bias, training, cache=None):
+        """Apply attention mechanism to x and y.
+    Args:
+      x: a tensor with shape [batch_size, length_x, num_units]
+      y: a tensor with shape [batch_size, length_y, num_units]
+      bias: attention bias that will be added to the result of the dot product.
+      training: boolean, whether in training mode or not.
+      cache: (Used during prediction) dictionary with tensors containing results
+        of previous attentions. The dictionary must have the items:
+            {"k": tensor with shape [batch_size, i, key_channels],
+             "v": tensor with shape [batch_size, i, value_channels]}
+        where i is the current decoded length.
+    Returns:
+      Attention layer output with shape [batch_size, length_x, num_units]
+    """
+        # batch_size = tf.shape(x)[0]
+        # length = tf.shape(x)[1]
+        # img_size = tf.shape(x)[2]
+        # bias = tf.reshape(tf.squeeze(bias), [batch_size, 1, length])
+        # bias = tf.broadcast_to(bias, [batch_size, img_size, length])
+        # bias = tf.reshape(bias, [batch_size, 1, 1, img_size * length])
+        bias = tf.expand_dims(bias, -2)
+        q_org = self.q_dense_layer(x)
+        k_org = self.q_dense_layer(x)
+        v_org = self.q_dense_layer(x)
+        if cache is not None:
+            # Combine cached keys and values with new keys and values.
+            k = tf.concat([cache["k"], k_org], axis=1)
+            v = tf.concat([cache["v"], v_org], axis=1)
+
+            # Update cache
+            cache["k"] = k_org
+            cache["v"] = v_org
+
+        # Split q, k, v into heads.
+        depth = (self.num_units // self.num_heads)
+        q = self.split_heads(q_org, length_prior=False)
+        k = self.split_heads(k_org, length_prior=False)
+        v = self.split_heads(v_org, length_prior=False)
+        # q = tf.reshape(q, [batch_size, -1, img_size * length, depth])
+        # k = tf.reshape(k, [batch_size, -1, img_size * length, depth])
+        # v = tf.reshape(v, [batch_size, -1, img_size * length, depth])
+        q *= depth**-0.5
+
+        # Calculate dot product attention
+        logits = tf.matmul(q, k, transpose_b=True)
+        # logits += bias
+        weights = tf.nn.softmax(logits, name="attention_weights")
+        if training:
+            weights = tf.nn.dropout(weights, rate=self.dropout)
+        with tf.name_scope('attention_output'):
+            attention_output = tf.matmul(weights, v)
+        # attention_output = tf.reshape(
+        #     attention_output, [batch_size, -1, img_size, length, depth])
+        # Recombine heads --> [batch_size, length, num_units]
+        length_attention_output = self.combine_heads(
+            attention_output, length_prior=False)
+
+        # q = self.split_heads(q_org, length_prior=False)
+        # k = self.split_heads(k_org, length_prior=False)
+        # v = self.split_heads(v_org, length_prior=False)
+        # q *= depth**-0.5
+        #
+        # # Calculate dot product attention
+        # logits = tf.matmul(q, k, transpose_b=True)
+        # weights = tf.nn.softmax(logits, name="attention_weights")
+        # if training:
+        #     weights = tf.nn.dropout(weights, rate=self.dropout)
+        # with tf.name_scope('attention_output'):
+        #     attention_output = tf.matmul(weights, v)
+        #
+        # # Recombine heads --> [batch_size, length, num_units]
+        # img_attention_output = self.combine_heads(
+        #     attention_output, length_prior=False)
+        # attention_output = tf.concat(
+        #     (img_attention_output, length_attention_output), -1)
+        return self.time_output_dense_layer(length_attention_output)
+
+
 class Attention(tf.keras.layers.Layer):
     """Multi-headed attention layer."""
 
@@ -129,7 +317,7 @@ class Attention(tf.keras.layers.Layer):
         weights = tf.nn.softmax(logits, name="attention_weights")
         if training:
             weights = tf.nn.dropout(weights, rate=self.dropout)
-        with  tf.name_scope('attention_output'):
+        with tf.name_scope('attention_output'):
             attention_output = tf.matmul(weights, v)
 
         # Recombine heads --> [batch_size, length, num_units]
@@ -166,25 +354,27 @@ class EmbeddingSharedWeights(tf.keras.layers.Layer):
         self.vocab_size = vocab_size
         self.num_units = num_units
         self.pad_id = pad_id
-
-    def build(self, input_shape):
-        self.shared_weights = self.add_variable(
+        self.shared_weights = self.add_weight(
             shape=[self.vocab_size, self.num_units],
             dtype="float32",
             name="shared_weights",
             initializer=tf.random_normal_initializer(
                 mean=0., stddev=self.num_units**-0.5))
+
+    def build(self, input_shape):
         super(EmbeddingSharedWeights, self).build(input_shape)
         # self.build = True
 
     def call(self, inputs):
-        mask = tf.cast(tf.not_equal(inputs, 0), dtype=tf.float32)
+        batch_size = tf.shape(input=inputs)[0]
+        mask = tf.cast(tf.not_equal(inputs, self.pad_id), dtype=tf.float32)
         embeddings = tf.gather(self.shared_weights, inputs)
         # embeddings = tf.nn.embedding_lookup(self.shared_weights, inputs)
         embeddings *= tf.expand_dims(mask, -1)
         # Scale embedding by the sqrt of the hidden size
         embeddings *= self.num_units**0.5
-
+        embeddings = tf.reshape(embeddings, [-1, self.num_units])
+        embeddings = tf.reshape(embeddings, [batch_size, -1, self.num_units])
         return embeddings
 
     def linear(self, inputs):
@@ -200,6 +390,17 @@ class EmbeddingSharedWeights(tf.keras.layers.Layer):
         logits = tf.matmul(inputs, self.shared_weights, transpose_b=True)
 
         return tf.reshape(logits, [batch_size, length, self.vocab_size])
+
+    def att_shared_weights(self, inputs):
+        # projection = tf.matmul(
+        #     self.project_weights, self.shared_weights, transpose_b=True)
+        batch_size = tf.shape(input=inputs)[0]
+        inputs = tf.reshape(inputs, [-1, self.num_units]) * 64**-0.5
+        weights = tf.matmul(inputs, self.shared_weights, transpose_b=True)
+        # weights = tf.nn.softmax(weights, -1)
+        att = tf.matmul(weights, self.shared_weights)
+        att = tf.reshape(inputs, [batch_size, -1, self.num_units])
+        return att
 
     def get_config(self):
         # config = super(EmbeddingSharedWeights, self).get_config()
@@ -232,11 +433,11 @@ class LayerNorm(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         input_dim = input_shape[-1]
-        self.gamma_kernel = self.add_variable(
+        self.gamma_kernel = self.add_weight(
             shape=(input_dim),
             name="gamma",
             initializer=self.gamma_initializer)
-        self.beta_kernel = self.add_variable(
+        self.beta_kernel = self.add_weight(
             shape=(input_dim), name="beta", initializer=self.beta_initializer)
         super(LayerNorm, self).build(input_shape)
 
@@ -284,6 +485,49 @@ class NormBlock(tf.keras.layers.Layer):
         if training:
             y = tf.nn.dropout(y, rate=self.dropout)
         return y + x
+
+
+class CNN_FNN(tf.keras.layers.Layer):
+    def __init__(self, num_units, dropout, kernel=1, strides=1):
+        """Initialize FeedForwardNetwork.
+        Args:
+          num_units: int, output dim of hidden layer.
+          filter_size: int, filter size for the inner (first) dense layer.
+          relu_dropout: float, dropout rate for training.
+        """
+        super(CNN_FNN, self).__init__()
+        self.num_units = num_units
+        self.kernel = kernel
+        self.strides = 1
+        self.dropout = dropout
+
+    def build(self, input_shape):
+        out_dim = input_shape[-1]
+        # self.filter_dense_layer = tf.keras.layers.Dense(
+        #     self.num_units,
+        #     use_bias=True,
+        #     activation=tf.nn.relu,
+        #     name="filter_layer")
+        # self.output_dense_layer = tf.keras.layers.Dense(
+        #     out_dim, use_bias=True, name="output_layer")
+        self.cnn_ffn = ResnetBlock2D(
+            self.kernel,
+            [out_dim, self.num_units * 4, out_dim],
+            stage='cnn_ffn',
+            block='cnn_fnn',
+        )
+        super(CNN_FNN, self).build(input_shape)
+
+    def call(self, inputs):
+        return self.cnn_ffn(inputs)
+
+    def get_config(self):
+        return {
+            "kernel": self.kernel,
+            "strides": self.strides,
+            "num_units": self.num_units,
+            "dropout": self.dropout,
+        }
 
 
 class Feed_Forward_Network(tf.keras.layers.Layer):
@@ -449,6 +693,115 @@ class StackedSeqResBlock(tf.keras.layers.Layer):
                 inputs = layer(inputs, post_norm=post_norm, training=training)
 
         return inputs
+
+
+class ResnetConvBlock2D(tf.keras.layers.Layer):
+    def __init__(
+            self,
+            kernel_size,
+            filters,
+            strides=(2, 2),
+            stage=0,
+            block='0',
+    ):
+        super(ResnetConvBlock2D, self).__init__()
+        bn_axis = -1
+        conv_name_base = 'res' + str(stage) + block + '_branch'
+        bn_name_base = 'bn' + str(stage) + block + '_branch'
+        filters1, filters2, filters3 = filters
+
+        tf.keres.layers.Conv2D(
+            filters1, (1, 1),
+            use_bias=False,
+            kernel_initializer='he_normal',
+            kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+            name=conv_name_base + '2a')
+
+
+class ResnetBlock2D(tf.keras.layers.Layer):
+    def __init__(self,
+                 kernel_size,
+                 filters,
+                 strides=(1, 1),
+                 stage=0,
+                 block=0,
+                 mode='identity'):
+        super(ResnetBlock2D, self).__init__()
+        filters1, filters2, filters3 = filters
+        conv_name_base = 'res' + str(stage) + block + '_branch'
+        bn_name_base = 'bn' + str(stage) + block + '_branch'
+        bn_axis = -1
+        self.mode = mode
+        self.conv2a = tf.keras.layers.Conv2D(
+            filters1, (1, 1),
+            use_bias=False,
+            strides=strides,
+            kernel_initializer='he_normal',
+            kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+            name=conv_name_base + '2a')
+        self.bn2a = tf.keras.layers.BatchNormalization(
+            axis=bn_axis,
+            momentum=BATCH_NORM_DECAY,
+            epsilon=BATCH_NORM_EPSILON,
+            name=bn_name_base + '2a')
+
+        self.conv2b = tf.keras.layers.Conv2D(
+            filters2,
+            kernel_size,
+            strides=strides,
+            padding='same',
+            use_bias=False,
+            kernel_initializer='he_normal',
+            kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+            name=conv_name_base + '2b')
+        self.bn2b = tf.keras.layers.BatchNormalization(
+            axis=bn_axis,
+            momentum=BATCH_NORM_DECAY,
+            epsilon=BATCH_NORM_EPSILON,
+            name=bn_name_base + '2b')
+
+        self.conv2c = tf.keras.layers.Conv2D(
+            filters3, (1, 1),
+            use_bias=False,
+            strides=strides,
+            kernel_initializer='he_normal',
+            kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+            name=conv_name_base + '2c')
+        self.bn2c = tf.keras.layers.BatchNormalization(
+            axis=bn_axis,
+            momentum=BATCH_NORM_DECAY,
+            epsilon=BATCH_NORM_EPSILON,
+            name=bn_name_base + '2c')
+        if mode == 'conv':
+            self.short_cut = tf.keras.layers.Conv2D(
+                filters3, (1, 1),
+                strides=strides,
+                use_bias=False,
+                kernel_initializer='he_normal',
+                kernel_regularizer=regularizers.l2(L2_WEIGHT_DECAY),
+                name=conv_name_base + '1')
+            self.short_cut_norm = tf.keras.layers.BatchNormalization(
+                axis=bn_axis,
+                momentum=BATCH_NORM_DECAY,
+                epsilon=BATCH_NORM_EPSILON,
+                name=bn_name_base + '1')
+
+    def call(self, input_tensor, training=False):
+        x = self.conv2a(input_tensor)
+        x = self.bn2a(x, training=training)
+        x = tf.nn.relu(x)
+
+        x = self.conv2b(x)
+        x = self.bn2b(x, training=training)
+        x = tf.nn.relu(x)
+
+        x = self.conv2c(x)
+        x = self.bn2c(x, training=training)
+        if self.mode == 'conv':
+            input_tensor = self.short_cut(input_tensor)
+            input_tensor = self.short_cut_norm(input_tensor)
+        x += input_tensor
+        return tf.nn.relu(x)
 
 
 # class ResnetIdentityBlock(tf.keras.layers.Layer):

@@ -4,9 +4,16 @@ from hyper_and_conf import hyper_param as hyperParam
 from hyper_and_conf import hyper_train, hyper_optimizer
 import core_lip_main
 import core_data_SRCandTGT
+from core_resnet import identity_block, conv_block
 from tensorflow.python.client import device_lib
+# from tensorflow.python.keras import initializers
 import tensorflow as tf
 import numpy as np
+from tensorflow.python.keras import regularizers
+import core_Transformer_model
+L2_WEIGHT_DECAY = 1e-4
+BATCH_NORM_DECAY = 0.9
+BATCH_NORM_EPSILON = 1e-5
 DATA_PATH = sys.path[0]
 SYS_PATH = sys.path[1]
 # TRAIN_PATH = '/home/vivalavida/massive_data/lip_reading_data/sentence_level_lrs2'
@@ -16,15 +23,19 @@ src_data_path = [DATA_PATH + "/corpus/lip_corpus.txt"]
 tgt_data_path = [DATA_PATH + "/corpus/lip_corpus.txt"]
 # TFRECORD = '/home/vivalavida/massive_data/lip_reading_TFRecord/tfrecord_word'
 # TFRECORD = '/home/vivalavida/massive_data/sentence_lip_data_tfrecord_train_v1'
-TFRECORD = '/home/vivalavida/massive_data/lr_train'
-
-TFRECORD = '/home/wonderwall/data/lr_train'
+TFRECORD = '/home/vivalavida/massive_data/'
+# TFRECORD = '/home/wonderwall/data'
 
 # TFRECORD = '/home/vivalavida/massive_data/fc1'
 
 # TFRECORD = '/data'
 
 # TFRECORD = '/Users/barid/Documents/workspace/batch_data/'
+
+# PADDED_IMG = 150
+# PADDED_TEXT = 80
+PADDED_IMG = 50
+PADDED_TEXT = 1
 
 
 def get_vgg(self):
@@ -57,7 +68,7 @@ def gpus_device():
 
 
 gpu = get_available_gpus()
-TRAIN_MODE = 'large' if gpu > 0 else 'small'
+TRAIN_MODE = 'large' if gpu > 0 else 'test'
 hp = hyperParam.HyperParam(TRAIN_MODE, gpu=get_available_gpus())
 PAD_ID_int64 = tf.cast(hp.PAD_ID, tf.int64)
 PAD_ID_float32 = tf.cast(hp.PAD_ID, tf.float32)
@@ -117,6 +128,10 @@ def map_data_for_feed(x, y):
     return ((x, y), y)
 
 
+def map_data_for_text(x):
+    return ((x, x), x)
+
+
 def randomly_pertunate_input(x):
     determinater = np.random.randint(10)
     if determinater > 3:
@@ -132,24 +147,47 @@ def pad_sample(dataset, batch_size):
     dataset = dataset.padded_batch(
         hp.batch_size,
         (
-            [200, None],  # source vectors of unknown size
-            [80]),  # target vectors of unknown size
-        (PAD_ID_float32, PAD_ID_int64),
+            [PADDED_IMG, 32, 64, 3],  # source vectors of unknown size
+            [PADDED_TEXT]),  # target vectors of unknown size
         drop_remainder=True)
 
     return dataset
 
 
-def dataset_prepross_fn(src, tgt, val=False):
-    if val:
-        return (src, 0), tgt
-    return (src, tgt), tgt
+def pad_text_sample(dataset, batch_size):
+    # dataset = dataset.shuffle(200000, reshuffle_each_iteration=True)
+    dataset = dataset.padded_batch(
+        hp.batch_size,
+        [120],  # target vectors of unknown size
+        drop_remainder=True)
+
+    return dataset
+
+
+def reshape_data(src, tgt):
+    # return tf.reshape(src, [-1, 32, 64, 3]), tgt
+    return tf.reshape(src, [-1, 32, 64, 3]) / 127.5 - 1.0, tgt
+
+
+def map_data_for_val(src, tgt):
+    return src, tgt
+
+
+def train_Transformer_input():
+    dataset = data_manager.get_text_train_dataset()
+    # dataset = dataset.shuffle(100000)
+    dataset = pad_text_sample(dataset, batch_size=hp.batch_size)
+
+    dataset = dataset.map(map_data_for_text)
+    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    return dataset
 
 
 def train_input(seq2seq=True, pertunate=False):
 
     dataset = input_fn('TRAIN')
     # dataset = dataset.shuffle(100000)
+    dataset = dataset.map(reshape_data)
     dataset = pad_sample(dataset, batch_size=hp.batch_size)
 
     if pertunate:
@@ -164,57 +202,121 @@ def test_input(seq2seq=True, pertunate=False):
 
     dataset = input_fn('TRAIN')
     # dataset = dataset.shuffle(100000)
+    dataset = dataset.map(reshape_data)
     dataset = dataset.batch(1)
+    dataset = dataset.map(map_data_for_val)
     dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
     return dataset
 
 
 def val_input(seq2seq=True):
     dataset = input_fn("TRAIN")
+    dataset = dataset.map(reshape_data)
     dataset = pad_sample(dataset, 4)
     # dataset = dataset.map(map_data_for_val)
+    dataset = dataset.map(map_data_for_val)
+    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
     return dataset
 
 
 def get_external_loss():
-    return hyper_train.Onehot_CrossEntropy(hp.vocabulary_size)
+    return hyper_train.Onehot_CrossEntropy(hp.vocabulary_size, smoothing=0.1)
 
 
-def model_structure(training=True):
-    if training:
+def get_image_processor():
+    # with tf.device("/cpu:0"):
+    if tf.io.gfile.exists('pre_train/res50_pre_all'):
+        res = tf.keras.models.load_model('pre_train/res50_pre_all')
+    else:
+        res = tf.keras.applications.resnet50.ResNet50(
+            include_top=False, weights=None, input_shape=[32, 64, 3])
+        # pooling='avg',
+        # classes=10000)
+        res.save('pre_train/res50_pre_all')
+    return res
+
+
+def model_structure(training=True, batch=0, mode='LIP'):
+    if batch != 0:
+        batch_size = batch
+    else:
+        batch_size = hp.batch_size
+    img_input = tf.keras.layers.Input(
+        shape=[PADDED_IMG, 32, 64, 3], dtype=tf.float32, name='Raw_input')
+    if mode != 'LIP':
         img_input = tf.keras.layers.Input(
-            shape=[200, 4096], dtype=tf.float32, name='VGG_features')
+                shape=[None], dtype=tf.int64, name='src_text')
+    if training:
         tgt = tf.keras.layers.Input(
             shape=[None], dtype=tf.int64, name='target_text')
-        # metric = hyper_train.MetricLayer(hp.vocabulary_size)
-        # loss = hyper_train.CrossEntropy(hp.vocabulary_size, 0.1)
         daedalus = core_lip_main.Daedalus(
             hp.max_sequence_length, hp.vocabulary_size, hp.embedding_size,
             hp.batch_size, hp.num_units, hp.num_heads, hp.num_encoder_layers,
             hp.num_decoder_layers, hp.dropout, hp.EOS_ID, hp.PAD_ID,
             hp.MASK_ID)
-        logits = daedalus([img_input, tgt], training=training)
+        # res_out = tf.reshape(res_out, [-1, 200, 4 * 4 * 512])
+        logits = daedalus([img_input, tgt], training=training, mode=mode)
         logits = hyper_train.MetricLayer(hp.vocabulary_size)([logits, tgt])
-        # logits = hyper_train.CrossEntropy(hp.vocabulary_size,
-        #                                   0.1)([logits, tgt])
+        logits = hyper_train.CrossEntropy_layer(hp.vocabulary_size,
+                                                0.1)([logits, tgt])
         logits = tf.keras.layers.Lambda(lambda x: x, name="logits")(logits)
 
         model = tf.keras.Model(inputs=[img_input, tgt], outputs=logits)
     else:
-        img_input = tf.keras.layers.Input(
-            shape=[200, 4096], dtype=tf.float32, name='VGG_features')
         daedalus = core_lip_main.Daedalus(
             hp.max_sequence_length, hp.vocabulary_size, hp.embedding_size,
-            hp.batch_size, hp.num_units, hp.num_heads, hp.num_encoder_layers,
+            batch_size, hp.num_units, hp.num_heads, hp.num_encoder_layers,
             hp.num_decoder_layers, hp.dropout, hp.EOS_ID, hp.PAD_ID,
             hp.MASK_ID)
-        # metric = hyper_train.MetricLayer(hp.vocabulary_size)
-        # loss = hyper_train.CrossEntropy(hp.vocabulary_size, 0.1)
+        metric = hyper_train.MetricLayer(hp.vocabulary_size)
+        loss = hyper_train.CrossEntropy(hp.vocabulary_size, 0.1)
         ret = daedalus([img_input], training=training)
         outputs, scores = ret["outputs"], ret["scores"]
         model = tf.keras.Model(img_input, outputs)
-    # if multi_gpu and gpu > 0:
-    #     model = tf.keras.utils.multi_gpu_model(model, gpus=gpu)
+    return model
+
+
+def text_model_structure(training=True, batch=0):
+    if batch != 0:
+        batch_size = batch
+    else:
+        batch_size = hp.batch_size
+    src = tf.keras.layers.Input(shape=[None], dtype=tf.int64, name='src_text')
+    if training:
+        tgt = tf.keras.layers.Input(
+            shape=[None], dtype=tf.int64, name='target_text')
+        daedalus = core_Transformer_model.Transformer(
+            hp.max_sequence_length,
+            hp.vocabulary_size,
+            hp.embedding_size,
+            hp.batch_size,
+            hp.num_units,
+            hp.num_heads,
+            hp.num_encoder_layers,
+            hp.num_decoder_layers,
+            hp.dropout,
+            hp.EOS_ID,
+            hp.PAD_ID,
+        )
+        # res_out = tf.reshape(res_out, [-1, 200, 4 * 4 * 512])
+        logits = daedalus([src, tgt], training=training)
+        logits = hyper_train.MetricLayer(hp.vocabulary_size)([logits, tgt])
+        logits = hyper_train.CrossEntropy_layer(hp.vocabulary_size,
+                                                0.1)([logits, tgt])
+        logits = tf.keras.layers.Lambda(lambda x: x, name="logits")(logits)
+
+        model = tf.keras.Model(inputs=[src, tgt], outputs=logits)
+    # else:
+    #     daedalus = core_lip_main.Daedalus(
+    #         hp.max_sequence_length, hp.vocabulary_size, hp.embedding_size,
+    #         batch_size, hp.num_units, hp.num_heads, hp.num_encoder_layers,
+    #         hp.num_decoder_layers, hp.dropout, hp.EOS_ID, hp.PAD_ID,
+    #         hp.MASK_ID)
+    #     metric = hyper_train.MetricLayer(hp.vocabulary_size)
+    #     loss = hyper_train.CrossEntropy(hp.vocabulary_size, 0.1)
+    #     ret = daedalus([img_input], training=training)
+    #     outputs, scores = ret["outputs"], ret["scores"]
+    #     model = tf.keras.Model(img_input, outputs)
     return model
 
 
@@ -222,8 +324,8 @@ def train_model():
     return model_structure(training=True)
 
 
-def test_model():
-    return model_structure(training=False)
+def test_model(batch=1):
+    return model_structure(training=False, batch=1)
 
 
 def get_optimizer():
@@ -244,6 +346,8 @@ def get_callbacks():
     TFchechpoint = tf.keras.callbacks.ModelCheckpoint(
         hp.model_checkpoint_dir + '/model.{epoch:02d}.ckpt',
         save_weights_only=True,
-        verbose=1,
-    )
-    return [LRschedule, TFboard, TFchechpoint]
+        verbose=1)
+    NaNchecker = tf.keras.callbacks.TerminateOnNaN()
+    ForceLrReduce = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='accuracy', factor=0.2, patience=1, mode='max', min_lr=0.00001)
+    return [LRschedule, TFboard, TFchechpoint, NaNchecker, ForceLrReduce]

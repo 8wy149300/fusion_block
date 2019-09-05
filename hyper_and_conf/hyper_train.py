@@ -8,7 +8,7 @@ from tensorflow.python.keras.losses import Loss
 
 
 class Onehot_CrossEntropy(Loss):
-    def __init__(self, vocab_size, mask_id=0, smoothing=0.1):
+    def __init__(self, vocab_size, mask_id=0, smoothing=0.0):
 
         super(Onehot_CrossEntropy, self).__init__(name="Onehot_CrossEntropy")
         self.vocab_size = vocab_size
@@ -27,14 +27,14 @@ class Onehot_CrossEntropy(Loss):
         return loss
 
 
-class CrossEntropy(tf.keras.layers.Layer):
+class CrossEntropy_layer(tf.keras.layers.Layer):
     def __init__(self, vocab_size, label_smoothing):
-        super(CrossEntropy, self).__init__()
+        super(CrossEntropy_layer, self).__init__()
         self.vocab_size = vocab_size
         self.label_smoothing = label_smoothing
 
     def build(self, input_shape):
-        super(CrossEntropy, self).build(input_shape)
+        super(CrossEntropy_layer, self).build(input_shape)
 
     def get_config(self):
         return {
@@ -64,7 +64,10 @@ class MetricLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         """"Builds metric layer."""
         self.metric_mean_fns = [
-            (tf.keras.metrics.Mean("approx_bleu"), conf_metrics.approx_bleu),
+            (tf.keras.metrics.Mean("approx_4-gram_bleu"),
+             conf_metrics.approx_bleu),
+            (tf.keras.metrics.Mean("approx_unigram_bleu"),
+             conf_metrics.approx_unigram_bleu),
             (tf.keras.metrics.Mean("wer"), conf_metrics.wer_score),
             (tf.keras.metrics.Mean("accuracy"), conf_metrics.padded_accuracy),
             (tf.keras.metrics.Mean("accuracy_top5"),
@@ -81,11 +84,11 @@ class MetricLayer(tf.keras.layers.Layer):
         logits, targets = inputs[0], inputs[1]
         # TODO(guptapriya): Remove this check when underlying issue to create metrics
         # with dist strat in cross replica context is fixed.
-        if tf.distribute.has_strategy(
-        ) and not tf.distribute.in_cross_replica_context():
-            for mean, fn in self.metric_mean_fns:
-                m = mean(*fn(logits, targets))
-                self.add_metric(m)
+        # if tf.distribute.has_strategy(
+        # ) and not tf.distribute.in_cross_replica_context():
+        for mean, fn in self.metric_mean_fns:
+            m = mean(*fn(logits, targets))
+            self.add_metric(m)
         # else:
         #     for mean, fn in self.metric_mean_fns:
         #         m = mean(*fn(logits, targets))

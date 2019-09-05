@@ -3,6 +3,11 @@ from hyper_and_conf import conf_fn as train_conf
 from data import data_setentceToByte_helper
 import tensorflow as tf
 
+# PADDED_IMG = 150
+# PADDED_TEXT = 80
+PADDED_IMG = 50
+PADDED_TEXT = 1
+
 
 class DatasetManager():
     def __init__(self,
@@ -129,13 +134,15 @@ class DatasetManager():
 
         def _filter_max_length(example, max_length=150):
             return tf.logical_and(
-                tf.size(input=example[0]) <= 200 * 4096,
+                tf.size(input=example[0]) <= PADDED_IMG * 6144,
+                # tf.size(example[1]) == 1)
                 tf.greater_equal(example[2], 0.2)[0])
             # tf.greater_equal(example[2], tf.constant(0.1))[0])
 
         def format_data(img, text, ratio):
-            return (tf.reshape(img, (-1, 4096)),
-                    tf.cast(text[:80], dtype=tf.int64))
+            return (tf.reshape(img, (-1, 6144))[:PADDED_IMG, :],
+                    tf.cast([text[0]], dtype=tf.int64))
+            # return tf.cast([text[0]], dtype=tf.int64)
 
         # dataset = files.apply(
         #     tf.data.experimental.parallel_interleave(
@@ -174,15 +181,92 @@ class DatasetManager():
         #     num_parallel_calls=self.cpus)
         return dataset
 
+    def create_text_dataset(self, files):
+        def _parse_example(serialized_example):
+            """Return inputs and targets Tensors from a serialized tf.Example."""
+            data_fields = {
+                "text": tf.io.VarLenFeature(tf.int64),
+                "img": tf.io.VarLenFeature(tf.float32),
+                "ratio": tf.io.VarLenFeature(tf.float32)
+            }
+            # import pdb;pdb.set_trace()
+            parsed = tf.io.parse_single_example(
+                serialized=serialized_example, features=data_fields)
+            img = tf.sparse.to_dense(parsed["img"])
+            text = tf.sparse.to_dense(parsed["text"])
+            ratio = tf.sparse.to_dense(parsed["ratio"])
+            return img, text, ratio
+
+        # def _filter_max_length(example, max_length=150):
+        #     return tf.logical_and(
+        #         tf.size(input=example[0]) <= PADDED_IMG * 6144,
+        #         # tf.size(example[1]) == 1)
+        #         tf.greater_equal(example[2], 0.2)[0])
+        # tf.greater_equal(example[2], tf.constant(0.1))[0])
+
+        def format_data(img, text, ratio):
+            return tf.cast(text[:120], dtype=tf.int64)
+
+        # dataset = files.apply(
+        #     tf.data.experimental.parallel_interleave(
+        #         lambda file: tf.data.TFRecordDataset(
+        #             file, compression_type='GZIP', buffer_size=8 * 1000 * 1000
+        #         ),
+        #         sloppy=True,
+        #         cycle_length=12))
+        options = tf.data.Options()
+        options.experimental_deterministic = False
+        dataset = files.interleave(
+            lambda file: tf.data.TFRecordDataset(
+                file, compression_type='GZIP', buffer_size=8 * 1000 * 1000),
+            cycle_length=self.cpus,
+            num_parallel_calls=tf.data.experimental.AUTOTUNE).with_options(
+                options)
+        # buffer_output_elements=12,
+        # prefetch_input_elements=12,))
+        # dataset = tf.data.TFRecordDataset(
+        #     files,
+        #     compression_type='GZIP',
+        #     num_parallel_reads=12,
+        #     buffer_size=8 * 1000 * 1000)
+        # dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        dataset = dataset.map(
+            _parse_example, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = dataset.map(
+            format_data, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        # dataset = dataset.map(
+        #     lambda img, text, ratio: (
+        #         img,
+        #         text,
+        #     ),
+        #     num_parallel_calls=self.cpus)
+        return dataset
+
     def get_raw_train_dataset(self):
-        files = tf.data.Dataset.list_files([
-            self.tfrecord_path + "/fc1/train_TFRecord_*",
-            self.tfrecord_path + "/pretrain/train_TFRecord_*",
-        ],
-                                           shuffle=True)
+        files = tf.data.Dataset.list_files(
+            [
+                # self.tfrecord_path + "/lip_reading_raw_main/train_TFRecord_*",
+                # self.tfrecord_path +
+                # "/lip_reading_raw_main/liptrain_TFRecord_*",
+                self.tfrecord_path + "/lip_reading_word/train_TFRecord_*",
+            ],
+            shuffle=True)
         # self.tfrecord_path + "/lr_sentence_train/train_TFRecord_*")
-        files = files.shuffle(2000)
+        # files = files.shuffle(2000)
         return self.create_dataset(files)
+
+    def get_text_train_dataset(self):
+        files = tf.data.Dataset.list_files(
+            [
+                self.tfrecord_path + "/lip_reading_raw_main/train_TFRecord_*",
+                self.tfrecord_path +
+                "/lip_reading_raw_pre_train/train_TFRecord_*",
+                # self.tfrecord_path + "/lip_reading_word/train_TFRecord_*",
+            ],
+            shuffle=True)
+        # self.tfrecord_path + "/lr_sentence_train/train_TFRecord_*")
+        # files = files.shuffle(2000)
+        return self.create_text_dataset(files)
 
     def get_raw_val_dataset(self):
         files = tf.data.Dataset.list_files(

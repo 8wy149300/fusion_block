@@ -68,7 +68,6 @@ def pad_tensors_to_same_length(x, y, pad_id=0):
     """Pad x and y so that the results have the same length (second dimension)."""
     x_length = tf.shape(input=x)[1]
     y_length = tf.shape(input=y)[1]
-
     max_length = tf.maximum(x_length, y_length)
     if len(x.get_shape().as_list()) > 2:
         x = tf.pad(
@@ -114,8 +113,10 @@ def compute_wer(translation_corpus, reference_corpus, print_matrix=False):
     num = 0
     for (reference_corpus, translation_corpus) in zip(reference, translation):
         hyp = token_trim(translation_corpus, 1, remider=1)
-        ref = token_trim(reference_corpus, 0)
-
+        # ref = token_trim(reference_corpus, 0)
+        ref = token_trim(reference_corpus, 0, remider=1)
+        # hyp = translation_corpus
+        # ref = reference_corpus
         N = len(hyp)
         M = len(ref)
         L = np.zeros((N, M))
@@ -134,6 +135,7 @@ def compute_wer(translation_corpus, reference_corpus, print_matrix=False):
             #     print("WER matrix ({}x{}): ".format(N, M))
             #     print(L)
         score += float(int(L[N - 1, M - 1]) / M)
+        # print(float(int(L[N - 1, M - 1]) / M))
         num += 1
     # batch_score += score
     return score / num
@@ -183,7 +185,7 @@ def _get_ngrams_with_counter(segment, max_order):
 def compute_bleu(raw_reference_corpus,
                  raw_translation_corpus,
                  eos_id=1,
-                 max_order=1,
+                 max_order=4,
                  use_bp=True):
     """Computes BLEU score of translated segments against one or more references.
   Args:
@@ -218,7 +220,7 @@ def compute_bleu(raw_reference_corpus,
         matches_by_order = [0] * max_order
         possible_matches_by_order = [0] * max_order
         precisions = []
-        references = token_trim(references, 0)
+        references = token_trim(references, 0, remider=1)
         translations = token_trim(translations, 1, remider=1)
         # references = data_manager.decode(references).split(' ')
         # translations = data_manager.decode(translations).split(' ')
@@ -283,6 +285,29 @@ def approx_bleu(logits, labels):
     # score = tf.map_fn(f, data)
     score = tf.py_function(compute_bleu, [labels, logits], tf.float32)
     return score * 100, tf.constant(1.)
+
+
+def approx_unigram_bleu(logits, labels):
+    if len(logits.get_shape().as_list()) > 2:
+        logits = tf.argmax(logits, axis=-1)
+    else:
+        logits = tf.cast(logits, tf.int64)
+    labels = tf.cast(labels, tf.int64)
+    # num = tf.shape(logits)[0]
+    # data = tf.stack([labels, logits], axis=1)
+    # data = tf.cast(data, dtype=tf.float32)
+    #
+    # def f(data):
+    #     bleu = tf.py_function(compute_bleu, (data[0], data[1]), tf.float32)
+    #     return bleu * 100
+    #
+    # score = tf.map_fn(f, data)
+    score = tf.py_function(compute_unigram_bleu, [labels, logits], tf.float32)
+    return score * 100, tf.constant(1.)
+
+
+def compute_unigram_bleu(labels, logits):
+    return compute_bleu(labels, logits, max_order=1)
 
 
 def bleu_fn(labels, logits):
@@ -409,8 +434,11 @@ def padded_sequence_accuracy(logits, labels):
         return correct_seq, tf.constant(1.0)
 
 
-# a = tf.convert_to_tensor([[2, 2, 3, 1, 0, 0], [2, 2, 3, 1, 0, 0]])
-# b = tf.convert_to_tensor([[3, 4, 6, 1, 0, 0],[3, 4, 6, 1, 0, 0]])
+# a = tf.convert_to_tensor([[2, 2, 3, 2,2,1, 0, 0], [2, 2, 3, 2,2,1, 0, 0]])
+# b = tf.convert_to_tensor([[2, 3, 3, 1, 0, 0],[2, 2, 3, 1, 0, 0]])
+# # a = tf.convert_to_tensor([[2], [2]])
+# #
+# # b = tf.convert_to_tensor([[3], [2]])
 # c = tf.convert_to_tensor([
 #     [2, 2, 2, 134, 234, 123, 3, 2],
 # ])
@@ -418,4 +446,10 @@ def padded_sequence_accuracy(logits, labels):
 # re = tf.convert_to_tensor([[2, 2, 3, 1, 0, 0], [3, 4, 6, 1, 0, 0]])
 # tr = tf.convert_to_tensor([[2, 2, 2, 134, 234, 123, 3, 2],
 #                            [3, 6, 61, 23, 5, 6, 7, 2]])
+#
+# bleu, c = approx_bleu(a, b)
+# bleu
 # s, c = wer_score(a, b)
+# print(s)
+# s
+# p,_ = padded_accuracy(a,b)
